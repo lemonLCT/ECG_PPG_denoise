@@ -1,0 +1,24 @@
+# 本文件是“顶层依赖模板”，只维护你项目直接依赖的包。
+# 原理：使用 pip-tools 读取本文件后，解析并锁定传递依赖到 requirements.txt。
+#
+# 生成锁版本命令：
+#   python -m pip install pip-tools
+#   pip-compile requirements.in -o requirements.txt
+#
+# 安装命令：
+#   python -m pip install -r requirements.txt
+
+# 基础数值计算依赖：用于数组与信号处理相关计算。
+numpy>=1.26
+
+# 配置文件解析依赖：用于读取 YAML 实验配置。
+PyYAML>=6.0
+
+# 可选深度学习依赖：仅在训练/推理深度模型时启用。
+# torch>=2.2
+
+# 可选模型结构摘要依赖：用于打印网络层级与参数统计。
+# torchinfo>=1.8
+
+# 可选测试依赖：若你希望测试环境与运行环境分开，建议放到 requirements-dev.in。
+# pytest>=8.0
