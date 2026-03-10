@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from Data_Preparation.data_preparation import Data_Preparation
+from src.ecg_ppg_denoise.Data_Preparation.data_preparation import Data_Preparation
 
 DEFAULT_WORK_DIRS = ("data", "outputs", "outputs/checkpoints", "outputs/logs")
 

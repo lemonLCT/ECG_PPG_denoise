@@ -1,6 +1,6 @@
 import numpy as np
 import _pickle as pickle
-from Data_Preparation import Prepare_QTDatabase, Prepare_NSTDB
+from src.ecg_ppg_denoise.Data_Preparation import Prepare_QTDatabase, Prepare_NSTDB
 
 def Data_Preparation(noise_version=1):
 
