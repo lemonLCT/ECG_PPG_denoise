@@ -1,10 +1,12 @@
-﻿# =========================
+# =========================
 # 项目特定
 # =========================
 #model/
 AGENTS.md
 IMPLEMENTATION_PLAN.md
-
+src/ecg_ppg_denoise/data/mit-bih-noise-stress-test-database-1.0.0/*
+src/ecg_ppg_denoise/data/qt-database-1.0.0/*
+*.pkl
 # =========================
 # Python 缓存与字节码
 # =========================
@@ -57,8 +59,13 @@ env/
 outputs/
 logs/
 data/
+# 默认忽略源码包下的本地数据集，仅放行 Python 源文件和占位文件
+src/ecg_ppg_denoise/data/**
 !src/ecg_ppg_denoise/data/
-!src/ecg_ppg_denoise/data/**
+!src/ecg_ppg_denoise/data/**/
+!src/ecg_ppg_denoise/data/*.py
+!src/ecg_ppg_denoise/data/**/*.py
+!src/ecg_ppg_denoise/data/.gitkeep
 
 # =========================
 # 操作系统杂项文件
