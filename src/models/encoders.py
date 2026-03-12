@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from typing import Sequence
 
 from torch import Tensor, nn
 
@@ -6,33 +8,49 @@ from models.blocks import ConvNormGELU
 
 
 class SignalConditionEncoder1D(nn.Module):
-    """单模态条件编码器，输入 [B,1,T]，输出 [B,C,T/8]。"""
+    """仿 UniCardio singleEncoder 的多卷积核并行编码器。"""
 
-    def __init__(self, out_channels: int = 128, gn_groups: int = 8) -> None:
+    def __init__(
+        self,
+        in_channels: int = 1,
+        branch_channels: int = 48,
+        kernel_sizes: Sequence[int] = (1, 3, 5, 7, 9, 11),
+        out_channels: int = 128,
+        use_projection: bool = True,
+        gn_groups: int = 8,
+    ) -> None:
         super().__init__()
-        hidden = max(out_channels // 2, 32)
-        self.net = nn.Sequential(
-            ConvNormGELU(1, hidden, kernel_size=7, stride=2, gn_groups=gn_groups),
-            ConvNormGELU(hidden, hidden, kernel_size=5, stride=2, gn_groups=gn_groups),
-            ConvNormGELU(hidden, out_channels, kernel_size=5, stride=2, gn_groups=gn_groups),
-            ConvNormGELU(out_channels, out_channels, kernel_size=3, stride=1, gn_groups=gn_groups),
+        if not kernel_sizes:
+            raise ValueError("kernel_sizes 不能为空")
+
+        self.kernel_sizes = tuple(int(kernel) for kernel in kernel_sizes)
+        self.branch_channels = int(branch_channels)
+        self.concat_channels = self.branch_channels * len(self.kernel_sizes)
+        self.conv_layers = nn.ModuleList(
+            [
+                nn.Conv1d(in_channels, self.branch_channels, kernel_size=kernel, padding=kernel // 2)
+                for kernel in self.kernel_sizes
+            ]
         )
+        for layer in self.conv_layers:
+            nn.init.kaiming_normal_(layer.weight)
+            if layer.bias is not None:
+                nn.init.zeros_(layer.bias)
+
+        if use_projection and out_channels != self.concat_channels:
+            self.output_projection: nn.Module = ConvNormGELU(
+                self.concat_channels,
+                out_channels,
+                kernel_size=1,
+                stride=1,
+                gn_groups=gn_groups,
+            )
+            self.out_channels = out_channels
+        else:
+            self.output_projection = nn.Identity()
+            self.out_channels = self.concat_channels
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.net(x)
-
-
-class QualityAssessor1D(nn.Module):
-    """质量评估器，仅输出局部质量图 q_map。"""
-
-    def __init__(self, channels: int = 128, gn_groups: int = 8) -> None:
-        super().__init__()
-        hidden = max(channels // 2, 16)
-        self.net = nn.Sequential(
-            ConvNormGELU(channels, hidden, kernel_size=3, stride=1, gn_groups=gn_groups),
-            nn.Conv1d(hidden, 1, kernel_size=1),
-        )
-        self.act = nn.Sigmoid()
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.act(self.net(x))
+        branch_outputs = [conv(x) for conv in self.conv_layers]
+        features = torch.cat(branch_outputs, dim=1)
+        return self.output_projection(features)

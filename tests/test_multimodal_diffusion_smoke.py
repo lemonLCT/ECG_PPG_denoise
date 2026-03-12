@@ -36,6 +36,8 @@ def test_forward_supports_three_modality_modes() -> None:
         assert out["pred_noise_ppg"].shape == (batch_size, 1, length)
         assert out["x0_hat_ecg"].shape == (batch_size, 1, length)
         assert out["x0_hat_ppg"].shape == (batch_size, 1, length)
+        assert out["q_map_ecg"].shape == (batch_size, 1, length)
+        assert out["q_map_ppg"].shape == (batch_size, 1, length)
         assert "q_score_ecg" not in out
         assert "q_score_ppg" not in out
 

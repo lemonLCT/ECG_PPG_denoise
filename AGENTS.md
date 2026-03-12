@@ -116,6 +116,7 @@
 - `src/ecg_ppg_denoise/models/diffusion_schedule.py`：DDPM 1D 调度（线性 beta、q_sample、predict_x0_from_eps、p_sample）与 DDIM 预留接口。
 - `src/ecg_ppg_denoise/models/blocks.py`：基础网络块与共享主干 `UnifiedNoisePredictor1D`（1D U-Net + FiLM/AdaGN）。
 - `src/ecg_ppg_denoise/models/encoders.py`：ECG/PPG 条件编码器与质量评估器（输出 `q_map`、`q_score`）。
+- `src/ecg_ppg_denoise/models/quality_assessor.py`：质量评估器 `QualityAssessor1D`，负责从条件特征生成局部质量图 `q_map`。
 - `src/ecg_ppg_denoise/models/fusion.py`：模态存在性 + 质量双重门控融合，含 missing token 与 joint 条件编码。
 - `src/ecg_ppg_denoise/models/unified_diffusion_model.py`：统一模型 `ModalityFlexibleConditionalDiffusion`，仅负责 forward、条件噪声预测与 `denoise_signal` 采样。
 - src/ecg_ppg_denoise/losses/masked_losses.py：支持 modality_mask 的 MSE/L1/导数损失。

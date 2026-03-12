@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="评估 ECG 去噪指标")
     parser.add_argument("--config", type=str, default=None, help="YAML 配置路径")
     parser.add_argument("--model-name", type=str, default=None, help="YAML 中的模型配置名")
-    parser.add_argument("--checkpoint", type=str, required=True, help="模型 checkpoint 路径")
+    parser.add_argument("--checkpoint", type=str, default=None, help="模型 checkpoint 路径")
     parser.add_argument("--input-path", type=str, default=None, help="输入数据(.npz/.pt/.npy)")
     parser.add_argument("--use-qt-dataset", action="store_true", help="使用 QT Data_Preparation 评估集")
     parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本")
@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--use-ddim", action="store_true")
     parser.add_argument("--max-samples", type=int, default=0, help=">0 时仅评估前 N 条")
-    parser.add_argument("--output-dir", type=str, default="artifacts/eval")
+    parser.add_argument("--output-dir", type=str, default=None)
     return parser.parse_args()
 
 
@@ -50,9 +50,10 @@ def _stack_from_qt_val(noise_version: int) -> Tuple[np.ndarray, np.ndarray, np.n
 def _load_eval_arrays(args: argparse.Namespace) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     if args.use_qt_dataset:
         return _stack_from_qt_val(noise_version=args.qt_noise_version)
-    if args.input_path is None:
+    input_path = args.input_path
+    if input_path is None:
         raise ValueError("未启用 --use-qt-dataset 时，必须提供 --input-path")
-    arrays = load_multimodal_arrays(args.input_path)
+    arrays = load_multimodal_arrays(input_path)
     return arrays["clean_ecg"], arrays["noisy_ecg"], arrays["noisy_ppg"]
 
 
@@ -105,7 +106,10 @@ def main() -> int:
     logger = build_logger("evaluate")
     device = resolve_device(cfg.runtime.device)
 
-    ckpt_path = Path(args.checkpoint)
+    checkpoint_path = args.checkpoint or cfg.path.checkpoint_path
+    if not checkpoint_path:
+        raise ValueError("必须通过 --checkpoint 或 config.path.checkpoint_path 提供模型权重路径")
+    ckpt_path = Path(checkpoint_path)
     if not ckpt_path.exists():
         raise FileNotFoundError(f"checkpoint 不存在: {ckpt_path}")
 
@@ -115,6 +119,8 @@ def main() -> int:
     model.eval()
     logger.info("加载 checkpoint: %s", ckpt_path)
 
+    if args.input_path is None and cfg.path.eval_input_path:
+        args.input_path = cfg.path.eval_input_path
     clean_ecg, noisy_ecg, noisy_ppg = _load_eval_arrays(args)
     if args.max_samples > 0:
         clean_ecg = clean_ecg[: args.max_samples]
@@ -141,7 +147,7 @@ def main() -> int:
     metrics = compute_ecg_metrics(clean_ecg=clean_ecg, noisy_ecg=noisy_ecg, denoised_ecg=denoised_ecg)
     logger.info("ECG 评估指标: %s", metrics)
 
-    out_dir = ensure_dir(args.output_dir)
+    out_dir = ensure_dir(args.output_dir or cfg.path.eval_output_dir)
     metrics_path = out_dir / "metrics.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     np.savez(

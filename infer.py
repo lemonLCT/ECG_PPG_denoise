@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name", type=str, default=None, help="YAML 中的模型配置名")
     parser.add_argument("--checkpoint", type=str, default=None, help="模型 checkpoint，可不传")
     parser.add_argument("--input-path", type=str, default=None, help="输入数据 .npz/.pt/.npy")
-    parser.add_argument("--output-path", type=str, default="artifacts/infer/denoised_result.npz")
+    parser.add_argument("--output-path", type=str, default=None)
     parser.add_argument("--mode", type=str, default="auto", choices=["auto", "ecg", "ppg", "joint"])
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--num-steps", type=int, default=None)
@@ -71,8 +71,9 @@ def main() -> int:
     model = ModalityFlexibleConditionalDiffusion(cfg.model, cfg.loss).to(device)
     model.eval()
 
-    if args.checkpoint:
-        ckpt_path = Path(args.checkpoint)
+    checkpoint_path = args.checkpoint or cfg.path.checkpoint_path
+    if checkpoint_path:
+        ckpt_path = Path(checkpoint_path)
         if not ckpt_path.exists():
             raise FileNotFoundError(f"checkpoint 不存在: {ckpt_path}")
         payload = torch.load(ckpt_path, map_location=device)
@@ -81,8 +82,9 @@ def main() -> int:
     else:
         logger.info("未提供 checkpoint，使用随机初始化参数执行推理")
 
-    if args.input_path:
-        noisy_ecg, noisy_ppg = _prepare_input_from_file(args.input_path)
+    input_path = args.input_path or cfg.path.infer_input_path
+    if input_path:
+        noisy_ecg, noisy_ppg = _prepare_input_from_file(input_path)
     else:
         demo = generate_demo_signals(batch_size=1, signal_length=cfg.data.window_length, seed=cfg.runtime.seed)
         noisy_ecg = demo["noisy_ecg"]
@@ -102,7 +104,7 @@ def main() -> int:
             use_ddim=args.use_ddim,
         )
 
-    output_path = Path(args.output_path)
+    output_path = Path(args.output_path or cfg.path.infer_output_path)
     ensure_dir(output_path.parent)
     mask_row = result["modality_mask"][0].detach().cpu()
     payload = {"modality_mask": result["modality_mask"].detach().cpu().numpy()}

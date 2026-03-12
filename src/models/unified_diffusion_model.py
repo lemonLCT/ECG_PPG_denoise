@@ -9,8 +9,9 @@ from config import LossConfig, ModelConfig
 from losses import masked_derivative_l1, masked_l1, masked_mse
 from models.blocks import UnifiedNoisePredictor1D
 from models.diffusion_schedule import DiffusionSchedule1D
-from models.encoders import QualityAssessor1D, SignalConditionEncoder1D
+from models.encoders import SignalConditionEncoder1D
 from models.fusion import ModalityAwareFusion
+from models.quality_assessor import QualityAssessor1D
 
 
 class ModalityFlexibleConditionalDiffusion(nn.Module):
@@ -22,15 +23,31 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         self.loss_cfg = loss_cfg or LossConfig()
 
         self.ecg_encoder = SignalConditionEncoder1D(
-            out_channels=model_cfg.cond_channels,
+            in_channels=model_cfg.ecg_encoder.input_channels,
+            branch_channels=model_cfg.ecg_encoder.branch_channels,
+            kernel_sizes=model_cfg.ecg_encoder.kernel_sizes,
+            out_channels=model_cfg.ecg_encoder.output_channels,
+            use_projection=model_cfg.ecg_encoder.use_projection,
             gn_groups=model_cfg.gn_groups,
         )
         self.ppg_encoder = SignalConditionEncoder1D(
-            out_channels=model_cfg.cond_channels,
+            in_channels=model_cfg.ppg_encoder.input_channels,
+            branch_channels=model_cfg.ppg_encoder.branch_channels,
+            kernel_sizes=model_cfg.ppg_encoder.kernel_sizes,
+            out_channels=model_cfg.ppg_encoder.output_channels,
+            use_projection=model_cfg.ppg_encoder.use_projection,
             gn_groups=model_cfg.gn_groups,
         )
-        self.ecg_quality = QualityAssessor1D(channels=model_cfg.cond_channels, gn_groups=model_cfg.gn_groups)
-        self.ppg_quality = QualityAssessor1D(channels=model_cfg.cond_channels, gn_groups=model_cfg.gn_groups)
+        self.ecg_quality = QualityAssessor1D(
+            channels=model_cfg.cond_channels,
+            hidden_channels=model_cfg.quality_assessor.hidden_channels,
+            gn_groups=model_cfg.gn_groups,
+        )
+        self.ppg_quality = QualityAssessor1D(
+            channels=model_cfg.cond_channels,
+            hidden_channels=model_cfg.quality_assessor.hidden_channels,
+            gn_groups=model_cfg.gn_groups,
+        )
         self.fusion = ModalityAwareFusion(channels=model_cfg.cond_channels, joint_channels=model_cfg.joint_channels)
 
         self.noise_predictor = UnifiedNoisePredictor1D(

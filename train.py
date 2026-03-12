@@ -64,14 +64,16 @@ def apply_overrides(cfg: ExperimentConfig, args: argparse.Namespace) -> Experime
     if args.device is not None:
         cfg.runtime.device = args.device
     if args.output_dir is not None:
+        cfg.path.train_output_dir = args.output_dir
         cfg.runtime.output_dir = args.output_dir
     if args.data_path is not None:
+        cfg.path.dataset_path = args.data_path
         cfg.data.data_path = args.data_path
     if args.epochs is not None:
         cfg.train.epochs = args.epochs
     if args.batch_size is not None:
-        cfg.data.batch_size = args.batch_size
-        cfg.data.val_batch_size = args.batch_size
+        cfg.train.batch_size = args.batch_size
+        cfg.train.val_batch_size = args.batch_size
     if args.lr is not None:
         cfg.train.lr = args.lr
     if args.max_steps_per_epoch is not None:
@@ -95,7 +97,7 @@ def main() -> int:
     logger = build_logger("train")
     device = resolve_device(cfg.runtime.device)
     seed_everything(cfg.runtime.seed)
-    output_dir = ensure_dir(cfg.runtime.output_dir)
+    output_dir = ensure_dir(cfg.path.train_output_dir)
     ckpt_dir = ensure_dir(output_dir / "checkpoints")
     dump_config_snapshot(cfg, output_dir)
 
@@ -111,14 +113,14 @@ def main() -> int:
     )
     train_loader = DataLoader(
         train_ds,
-        batch_size=cfg.data.batch_size,
+        batch_size=cfg.train.batch_size,
         shuffle=True,
         num_workers=cfg.data.num_workers,
         pin_memory=(device.type == "cuda"),
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=cfg.data.val_batch_size,
+        batch_size=cfg.train.val_batch_size,
         shuffle=False,
         num_workers=cfg.data.num_workers,
         pin_memory=(device.type == "cuda"),
