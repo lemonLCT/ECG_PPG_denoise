@@ -6,11 +6,10 @@ import torch
 from torch import Tensor, nn
 
 from config import LossConfig, ModelConfig
-from losses import masked_derivative_l1, masked_l1, masked_mse
+from losses import masked_derivative_l1, masked_mse
 from models.blocks import UnifiedNoisePredictor1D
 from models.diffusion_schedule import DiffusionSchedule1D
 from models.encoders import SignalConditionEncoder1D
-from models.fusion import ModalityAwareFusion
 from models.quality_assessor import QualityAssessor1D
 
 
@@ -21,6 +20,7 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         super().__init__()
         self.model_cfg = model_cfg
         self.loss_cfg = loss_cfg or LossConfig()
+        self.cond_channels = self._resolve_cond_channels(model_cfg)
 
         self.ecg_encoder = SignalConditionEncoder1D(
             in_channels=model_cfg.ecg_encoder.input_channels,
@@ -39,19 +39,24 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
             gn_groups=model_cfg.gn_groups,
         )
         self.ecg_quality = QualityAssessor1D(
-            channels=model_cfg.cond_channels,
+            channels=self.cond_channels,
             hidden_channels=model_cfg.quality_assessor.hidden_channels,
             gn_groups=model_cfg.gn_groups,
         )
         self.ppg_quality = QualityAssessor1D(
-            channels=model_cfg.cond_channels,
+            channels=self.cond_channels,
             hidden_channels=model_cfg.quality_assessor.hidden_channels,
             gn_groups=model_cfg.gn_groups,
         )
-        self.fusion = ModalityAwareFusion(channels=model_cfg.cond_channels, joint_channels=model_cfg.joint_channels)
+        # 暂不启用跨模态特征融合，局部条件直接使用各自编码特征。
+        self.context_proj = nn.Sequential(
+            nn.Linear(self.cond_channels * 2 + 4, model_cfg.joint_channels),
+            nn.GELU(),
+            nn.Linear(model_cfg.joint_channels, model_cfg.joint_channels),
+        )
 
         self.noise_predictor = UnifiedNoisePredictor1D(
-            cond_channels=model_cfg.cond_channels,
+            cond_channels=self.cond_channels,
             joint_channels=model_cfg.joint_channels,
             base_channels=model_cfg.base_channels,
             gn_groups=model_cfg.gn_groups,
@@ -65,6 +70,20 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
             beta_start=model_cfg.beta_start,
             beta_end=model_cfg.beta_end,
         )
+
+    @staticmethod
+    def _resolve_cond_channels(model_cfg: ModelConfig) -> int:
+        ecg_channels = model_cfg.ecg_encoder.resolved_output_channels
+        ppg_channels = model_cfg.ppg_encoder.resolved_output_channels
+        if ecg_channels != ppg_channels:
+            raise ValueError(
+                f"ECG/PPG encoder 输出通道必须一致，实际为 {ecg_channels} 和 {ppg_channels}"
+            )
+        model_cfg.ecg_encoder.output_channels = ecg_channels
+        model_cfg.ppg_encoder.output_channels = ppg_channels
+        if model_cfg.cond_channels != ecg_channels:
+            model_cfg.cond_channels = ecg_channels
+        return ecg_channels
 
     @staticmethod
     def _ensure_3d(x: Tensor, name: str) -> Tensor:
@@ -100,7 +119,18 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         q_map_ppg = self.ppg_quality(feat_ppg)
         q_map_ecg = q_map_ecg * self._signal_mask(modality_mask, 0, q_map_ecg)
         q_map_ppg = q_map_ppg * self._signal_mask(modality_mask, 1, q_map_ppg)
-        c_ecg, c_ppg, c_joint = self.fusion(feat_ecg, feat_ppg, q_map_ecg, q_map_ppg, modality_mask)
+        c_ecg = feat_ecg
+        c_ppg = feat_ppg
+        pooled_ecg = c_ecg.mean(dim=-1)
+        pooled_ppg = c_ppg.mean(dim=-1)
+        quality_summary = torch.cat(
+            [
+                q_map_ecg.mean(dim=-1) * modality_mask[:, 0:1].to(dtype=q_map_ecg.dtype, device=q_map_ecg.device),
+                q_map_ppg.mean(dim=-1) * modality_mask[:, 1:2].to(dtype=q_map_ppg.dtype, device=q_map_ppg.device),
+            ],
+            dim=1,
+        )
+        c_joint = self.context_proj(torch.cat([pooled_ecg, pooled_ppg, modality_mask.float(), quality_summary], dim=1))
         return {
             "feat_ecg": feat_ecg,
             "feat_ppg": feat_ppg,
@@ -201,24 +231,18 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         diff_loss_ppg = masked_mse(outputs["pred_noise_ppg"], noise_ppg, ppg_mask)
         diffusion_loss = 0.5 * (diff_loss_ecg + diff_loss_ppg)
 
-        rec_loss_ecg = masked_l1(outputs["x0_hat_ecg"], clean_ecg, ecg_mask)
-        rec_loss_ppg = masked_l1(outputs["x0_hat_ppg"], clean_ppg, ppg_mask)
-        reconstruction_loss = 0.5 * (rec_loss_ecg + rec_loss_ppg)
-
         der_loss_ecg = masked_derivative_l1(outputs["x0_hat_ecg"], clean_ecg, ecg_mask)
         der_loss_ppg = masked_derivative_l1(outputs["x0_hat_ppg"], clean_ppg, ppg_mask)
         derivative_loss = 0.5 * (der_loss_ecg + der_loss_ppg)
 
         total_loss = (
             self.loss_cfg.diffusion_weight * diffusion_loss
-            + self.loss_cfg.reconstruction_weight * reconstruction_loss
             + self.loss_cfg.derivative_weight * derivative_loss
         )
 
         return {
             "total_loss": total_loss,
             "diffusion_loss": diffusion_loss,
-            "reconstruction_loss": reconstruction_loss,
             "derivative_loss": derivative_loss,
             **outputs,
         }

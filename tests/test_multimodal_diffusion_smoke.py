@@ -3,17 +3,14 @@
 import pytest
 import torch
 
-from ecg_ppg_denoise.config import ExperimentConfig
+from ecg_ppg_denoise.config import load_experiment_config
 from ecg_ppg_denoise.models import ModalityFlexibleConditionalDiffusion
 
 
 def _build_small_components() -> ModalityFlexibleConditionalDiffusion:
-    cfg = ExperimentConfig()
+    cfg = load_experiment_config(model_name="modality_flexible_conditional_diffusion_debug", stage="joint")
     cfg.model.signal_length = 128
     cfg.model.diffusion_steps = 20
-    cfg.model.base_channels = 32
-    cfg.model.cond_channels = 64
-    cfg.model.joint_channels = 128
     cfg.data.window_length = 128
     cfg.validate()
     return ModalityFlexibleConditionalDiffusion(cfg.model, cfg.loss)
@@ -38,8 +35,26 @@ def test_forward_supports_three_modality_modes() -> None:
         assert out["x0_hat_ppg"].shape == (batch_size, 1, length)
         assert out["q_map_ecg"].shape == (batch_size, 1, length)
         assert out["q_map_ppg"].shape == (batch_size, 1, length)
+        assert out["c_ecg"].shape[0] == batch_size
+        assert out["c_ecg"].shape[-1] == length
+        assert out["c_ppg"].shape[0] == batch_size
+        assert out["c_ppg"].shape[-1] == length
+        assert out["c_joint"].shape[0] == batch_size
         assert "q_score_ecg" not in out
         assert "q_score_ppg" not in out
+
+
+def test_local_context_uses_encoder_features_directly() -> None:
+    model = _build_small_components()
+    batch_size, length = 2, 128
+    cond_ecg = torch.randn(batch_size, 1, length)
+    cond_ppg = torch.randn(batch_size, 1, length)
+    mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
+
+    enc = model._encode_conditions(cond_ecg=cond_ecg, cond_ppg=cond_ppg, modality_mask=mask)
+
+    assert torch.allclose(enc["c_ecg"], enc["feat_ecg"])
+    assert torch.allclose(enc["c_ppg"], enc["feat_ppg"])
 
 
 def test_one_training_step_runs() -> None:
@@ -117,6 +132,7 @@ def test_default_loss_reduces_to_diffusion_objective() -> None:
         modality_mask=mask,
     )
 
+    assert "reconstruction_loss" not in out
     assert torch.allclose(out["total_loss"], out["diffusion_loss"])
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import torch
 from torch import Tensor, nn
 
 from models.blocks import ConvNormGELU
@@ -13,10 +14,10 @@ class SignalConditionEncoder1D(nn.Module):
     def __init__(
         self,
         in_channels: int = 1,
-        branch_channels: int = 48,
+        branch_channels: int = 16,
         kernel_sizes: Sequence[int] = (1, 3, 5, 7, 9, 11),
-        out_channels: int = 128,
-        use_projection: bool = True,
+        out_channels: int = 96,
+        use_projection: bool = False,
         gn_groups: int = 8,
     ) -> None:
         super().__init__()

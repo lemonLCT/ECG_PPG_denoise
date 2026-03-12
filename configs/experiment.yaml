@@ -19,7 +19,6 @@ data:
 
 loss:
   diffusion_weight: 1.0
-  reconstruction_weight: 0.0
   derivative_weight: 0.0
 
 models:

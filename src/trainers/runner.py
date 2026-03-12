@@ -86,7 +86,6 @@ class TrainEngine:
         sums = {
             "total_loss": 0.0,
             "diffusion_loss": 0.0,
-            "reconstruction_loss": 0.0,
             "derivative_loss": 0.0,
         }
         step_count = 0
@@ -145,7 +144,6 @@ class TrainEngine:
         sums = {
             "total_loss": 0.0,
             "diffusion_loss": 0.0,
-            "reconstruction_loss": 0.0,
             "derivative_loss": 0.0,
         }
         step_count = 0

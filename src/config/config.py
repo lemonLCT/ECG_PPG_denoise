@@ -40,10 +40,16 @@ class PathConfig:
 @dataclass
 class SingleEncoderConfig:
     input_channels: int = 1
-    branch_channels: int = 48
+    branch_channels: int = 16
     kernel_sizes: list[int] = field(default_factory=lambda: [1, 3, 5, 7, 9, 11])
-    output_channels: int = 128
-    use_projection: bool = True
+    output_channels: int = 96
+    use_projection: bool = False
+
+    @property
+    def resolved_output_channels(self) -> int:
+        if self.use_projection:
+            return self.output_channels
+        return self.branch_channels * len(self.kernel_sizes)
 
 
 @dataclass
@@ -56,7 +62,7 @@ class QualityAssessorConfig:
 class ModelConfig:
     name: str = "modality_flexible_conditional_diffusion"
     signal_length: int = 512
-    cond_channels: int = 128
+    cond_channels: int = 96
     joint_channels: int = 256
     base_channels: int = 64
     gn_groups: int = 8
@@ -71,7 +77,6 @@ class ModelConfig:
 @dataclass
 class LossConfig:
     diffusion_weight: float = 1.0
-    reconstruction_weight: float = 0.0
     derivative_weight: float = 0.0
 
 
@@ -110,8 +115,12 @@ class ExperimentConfig:
         elif self.runtime.output_dir:
             self.path.train_output_dir = self.runtime.output_dir
 
-        self.model.ecg_encoder.output_channels = self.model.cond_channels
-        self.model.ppg_encoder.output_channels = self.model.cond_channels
+        ecg_channels = self.model.ecg_encoder.resolved_output_channels
+        ppg_channels = self.model.ppg_encoder.resolved_output_channels
+        self.model.ecg_encoder.output_channels = ecg_channels
+        self.model.ppg_encoder.output_channels = ppg_channels
+        if ecg_channels == ppg_channels:
+            self.model.cond_channels = ecg_channels
 
     def validate(self) -> None:
         self.sync_legacy_fields()
@@ -135,6 +144,8 @@ class ExperimentConfig:
             raise ValueError("模型通道数必须 > 0")
         if self.model.joint_channels <= 0:
             raise ValueError("joint_channels 必须 > 0")
+
+        resolved_channels: dict[str, int] = {}
         for encoder_name, encoder_cfg in (("ecg_encoder", self.model.ecg_encoder), ("ppg_encoder", self.model.ppg_encoder)):
             if encoder_cfg.input_channels <= 0:
                 raise ValueError(f"{encoder_name}.input_channels 必须 > 0")
@@ -143,9 +154,17 @@ class ExperimentConfig:
             if not encoder_cfg.kernel_sizes:
                 raise ValueError(f"{encoder_name}.kernel_sizes 不能为空")
             if any(kernel <= 0 or kernel % 2 == 0 for kernel in encoder_cfg.kernel_sizes):
-                raise ValueError(f"{encoder_name}.kernel_sizes 必须全为正奇数")
-            if encoder_cfg.output_channels != self.model.cond_channels:
-                raise ValueError(f"{encoder_name}.output_channels 必须等于 model.cond_channels")
+                raise ValueError(f"{encoder_name}.kernel_sizes 必须全部为正奇数")
+            if encoder_cfg.use_projection and encoder_cfg.output_channels <= 0:
+                raise ValueError(f"{encoder_name}.output_channels 必须 > 0")
+            if encoder_cfg.resolved_output_channels <= 0:
+                raise ValueError(f"{encoder_name}.resolved_output_channels 必须 > 0")
+            resolved_channels[encoder_name] = encoder_cfg.resolved_output_channels
+
+        if resolved_channels["ecg_encoder"] != resolved_channels["ppg_encoder"]:
+            raise ValueError("ecg_encoder 和 ppg_encoder 的实际输出通道数必须一致")
+        if resolved_channels["ecg_encoder"] != self.model.cond_channels:
+            raise ValueError("model.cond_channels 必须等于 encoder 的实际输出通道数")
         if self.model.quality_assessor.hidden_channels <= 0:
             raise ValueError("quality_assessor.hidden_channels 必须 > 0")
         if self.model.quality_assessor.output_channels != 1:
