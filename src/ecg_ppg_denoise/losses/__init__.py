@@ -1,5 +1,3 @@
-﻿"""损失函数相关模块。"""
+from .masked_losses import masked_derivative_l1, masked_l1, masked_mse
 
-from ecg_ppg_denoise.losses.base import BaseLoss
-
-__all__ = ["BaseLoss"]
+__all__ = ["masked_mse", "masked_l1", "masked_derivative_l1"]

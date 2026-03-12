@@ -1,0 +1,45 @@
+{
+  "runtime": {
+    "experiment_name": "modality_flexible_diffusion",
+    "seed": 42,
+    "device": "cpu",
+    "output_dir": "artifacts/runs/smoke_joint",
+    "use_amp": true
+  },
+  "data": {
+    "data_path": "",
+    "batch_size": 2,
+    "val_batch_size": 2,
+    "num_workers": 0,
+    "val_ratio": 0.1,
+    "window_length": 512,
+    "window_stride": 256,
+    "synthetic_num_samples": 64
+  },
+  "model": {
+    "signal_length": 512,
+    "cond_channels": 128,
+    "joint_channels": 256,
+    "base_channels": 64,
+    "gn_groups": 8,
+    "diffusion_steps": 50,
+    "beta_start": 0.0001,
+    "beta_end": 0.02
+  },
+  "loss": {
+    "diffusion_weight": 1.0,
+    "reconstruction_weight": 0.5,
+    "derivative_weight": 0.1,
+    "prior_weight": 0.1
+  },
+  "train": {
+    "epochs": 1,
+    "lr": 0.0002,
+    "weight_decay": 0.0001,
+    "grad_clip": 1.0,
+    "log_interval": 10,
+    "save_every_epochs": 1,
+    "max_steps_per_epoch": 1,
+    "modality_dropout": 0.15
+  }
+}

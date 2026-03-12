@@ -1,0 +1,69 @@
+config_version: 1
+
+runtime:
+  experiment_name: modality_flexible_diffusion
+  seed: 42
+  device: cuda
+  output_dir: artifacts/runs/normal_train
+  use_amp: true
+
+data:
+  data_path: ""
+  batch_size: 32
+  val_batch_size: 32
+  num_workers: 0
+  val_ratio: 0.1
+  window_length: 512
+  window_stride: 256
+  synthetic_num_samples: 1024
+
+loss:
+  diffusion_weight: 1.0
+  reconstruction_weight: 0.0
+  derivative_weight: 0.0
+
+models:
+  selected: modality_flexible_conditional_diffusion
+  variants:
+    modality_flexible_conditional_diffusion:
+      signal_length: 512
+      cond_channels: 128
+      joint_channels: 256
+      base_channels: 64
+      gn_groups: 8
+      diffusion_steps: 200
+      beta_start: 0.0001
+      beta_end: 0.02
+    modality_flexible_conditional_diffusion_debug:
+      signal_length: 512
+      cond_channels: 64
+      joint_channels: 128
+      base_channels: 32
+      gn_groups: 8
+      diffusion_steps: 50
+      beta_start: 0.0001
+      beta_end: 0.02
+
+training:
+  selected_stage: ecg_pretrain
+  common:
+    weight_decay: 0.0001
+    grad_clip: 1.0
+    log_interval: 20
+    save_every_epochs: 1
+  stages:
+    ecg_pretrain:
+      epochs: 50
+      lr: 0.0001
+      max_steps_per_epoch: 2000
+      modality_dropout: 0.0
+    ppg_pretrain:
+      epochs: 50
+      lr: 0.0001
+      max_steps_per_epoch: 2000
+      modality_dropout: 0.0
+    joint:
+      epochs: 80
+      lr: 0.0001
+      max_steps_per_epoch: 2500
+      modality_dropout: 0.1

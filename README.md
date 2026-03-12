@@ -1,11 +1,156 @@
-# ECG+PPG 去噪论文实验框架（骨架）
+# ECG/PPG 去噪实验工程
 
-本项目用于搭建 ECG 与 PPG 去噪实验的工程架构，仅提供模块边界与流程骨架，不包含任何具体算法实现。
+本项目实现统一的多模态条件扩散模型 `ModalityFlexibleConditionalDiffusion`，支持以下三种输入模式：
 
-## 快速开始
+1. `ECG-only`，对应 `modality_mask=[1, 0]`
+2. `PPG-only`，对应 `modality_mask=[0, 1]`
+3. `ECG+PPG joint`，对应 `modality_mask=[1, 1]`
+
+当前实现的关键约束如下：
+
+- 缺失模态会在条件编码和噪声预测主干之前被显式屏蔽，不允许信息泄漏到主干输入。
+- 默认训练目标是标准扩散噪声预测损失。
+- `reconstruction_weight` 和 `derivative_weight` 是可选辅助项，默认关闭。
+- `teacher prior` 已移除，当前版本不再支持 teacher checkpoint。
+
+## 目录
+
+```text
+.
+├─ configs/
+├─ src/ecg_ppg_denoise/
+│  ├─ config/
+│  ├─ data/
+│  ├─ losses/
+│  ├─ models/
+│  ├─ trainers/
+│  └─ utils/
+├─ tests/
+├─ train.py
+├─ infer.py
+└─ evaluate.py
+```
+
+## 环境
+
+- Python: `>=3.10`
+- 推荐 PyTorch: `>=2.2`
+- 主要依赖：`torch`、`numpy`、`PyYAML`、`tqdm`、`scikit-learn`
+
+安装：
 
 ```bash
 pip install -e ".[dev]"
-python scripts/run_pipeline.py
+```
+
+如果使用 `pip-tools`：
+
+```bash
+pip install pip-tools
+pip-compile requirements.in -o requirements.txt
+pip-compile requirements-dev.in -o requirements-dev.txt
+pip install -r requirements-dev.txt
+```
+
+## 配置
+
+默认配置位于 [configs/experiment.yaml](/D:/Code/OriginCode/PyCharm_Project/ECG_PPG_denoise/configs/experiment.yaml)。
+
+其中与当前训练逻辑最相关的字段：
+
+- `loss.diffusion_weight`：标准噪声预测损失权重，默认 `1.0`
+- `loss.reconstruction_weight`：`x0` 重建辅助损失，默认 `0.0`
+- `loss.derivative_weight`：导数域辅助损失，默认 `0.0`
+- `training.stages.*.modality_dropout`：联合训练时的模态 dropout
+
+如果你的目标是严格复现实验中的标准扩散训练，不要开启两个辅助损失。
+
+## 训练
+
+三阶段训练示例：
+
+```bash
+python train.py --config configs/experiment.yaml --stage ecg_pretrain
+python train.py --config configs/experiment.yaml --stage ppg_pretrain
+python train.py --config configs/experiment.yaml --stage joint
+```
+
+常用参数：
+
+- `--config <yaml_path>`：配置文件路径
+- `--model-name <model_key>`：选择 `models.variants` 中的模型配置
+- `--device cpu|cuda`
+- `--output-dir <path>`
+- `--resume <checkpoint>`
+- `--epochs <int>`
+- `--batch-size <int>`
+- `--lr <float>`
+- `--max-steps-per-epoch <int>`
+
+训练输出默认包含：
+
+- `checkpoints/latest.pt`
+- `checkpoints/best.pt`
+- `config_snapshot.yaml`
+
+## 推理
+
+基础用法：
+
+```bash
+python infer.py --config configs/experiment.yaml --checkpoint artifacts/runs/default/checkpoints/best.pt
+```
+
+单模态与联合模式：
+
+```bash
+python infer.py --mode ecg
+python infer.py --mode ppg
+python infer.py --mode joint
+```
+
+推理输出默认保存到 `artifacts/infer/denoised_result.npz`。
+
+输出字段语义：
+
+- 观测到的模态输出为 `denoised_ecg` / `denoised_ppg`
+- 未观测模态如果仍被模型生成，会保存为 `generated_ecg` / `generated_ppg`
+- `generated_*` 不能和有监督去噪结果直接等价比较
+
+## 评估
+
+```bash
+python evaluate.py --config configs/experiment.yaml --checkpoint artifacts/runs/default/checkpoints/best.pt --input-path your_data.npz
+```
+
+当前评估脚本聚焦 ECG 指标，支持：
+
+- `SSD`
+- `MAD`
+- `PRD`
+- `COS_SIM`
+- `SNR`
+- `SNR_improvement`
+
+## 数据接口
+
+支持 `.npz`、`.pt`、`.npy` 输入，其中键至少包含：
+
+- `clean_ecg`
+- `noisy_ecg`
+- `clean_ppg`
+- `noisy_ppg`
+
+数组形状支持 `[N, T]` 或 `[N, 1, T]`，内部会统一到 `[N, 1, T]`。
+
+## 测试
+
+```bash
 pytest -q
 ```
+
+已补充的关键回归点：
+
+- 缺失模态不会泄漏到噪声预测主干
+- 默认 `total_loss` 等于 `diffusion_loss`
+- 单模态/双模态前向均可运行

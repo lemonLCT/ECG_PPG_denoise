@@ -4,32 +4,32 @@
 - 全程使用简体中文进行沟通、注释与文档输出。
 - 只要任务涉及第三方依赖库或包（新增、升级、API 用法、兼容性判断），必须先查询 Context7 MCP：先 `resolve-library-id`，再 `query-docs`，并基于官方文档给出实现或结论。
 - 禁止凭记忆臆断第三方库 API；若 Context7 无结果，需明确说明并给出保守替代方案。
+- 新增代码优先放入 `src/`，避免继续扩散到根目录脚本式实现。
 
 ## 2) 项目目标与边界
 - 项目目标：构建 ECG/PPG 去噪实验工程，支持数据准备、训练、评估、复现实验与结果沉淀。
-- 当前仓库以工程骨架为主，`scripts/train.py` 与 `scripts/evaluate.py` 仍是入口骨架。
+- 当前仓库主入口为根目录 `train.py`、`infer.py`、`evaluate.py`。
 - `model/Score-based-ECG-Denoising/` 为外部参考实现与资源区，不作为主工程业务源码目录。
 
-## 3) 当前目录职责（按现状）
-- `scripts/`：命令行入口（`run_pipeline.py`、`train.py`、`evaluate.py`）。
-- `tests/`：基础测试（导入、配置、smoke）。
-- `Data_Preparation/`：数据预处理脚本（QTDB/NSTDB）。
-- `model/Score-based-ECG-Denoising/`：外部参考代码、数据与权重（默认只读使用）。
+## 3) 当前目录职责与功能说明
+- 推荐逐步落地并按职责拆分，同时如果有增加文件，请详细在本部分增加对应文件的功能说明和文件夹的职能。
+- `tests/`：基础测试，所有的pytest有关的测试脚本，或者以test_开头的文件都存在这里。
+- `model/`：外部参考代码、数据与权重（默认只读使用）。
 - `requirements.in` / `requirements-dev.in`：依赖输入清单（建议用 pip-tools 锁定）。
 - `pyproject.toml`：项目元信息与 pytest 配置。
-
-## 4) 目标工程结构（面向大型复杂项目演进）
-- 推荐逐步落地 `src/ecg_ppg_denoise/`，并按职责拆分：
+- `checkpoint`:用于存储训练模型文件，包含.pth等，禁止被git追踪并上传。
+- `src/`:
   - `config/`：配置定义、加载与校验。
   - `data/`：数据集、采样器、dataloader。
-  - `preprocess/`：信号预处理与增强。
+  - `Data_Preparation/`：QT数据集的预处理脚本（QTDB/NSTDB），不准修改。
   - `models/`：模型结构与组件。
   - `losses/`：损失函数。
-  - `trainers/`：训练流程与调度。
-  - `evaluators/`：评估流程。
-  - `metrics/`：评价指标。
+  - `trainers/`：模型训练流程与调度。
+  - `metrics/`：计算评价指标的函数和类的存储目录。
   - `utils/`：日志、随机种子、IO、通用工具。
-- 新增代码优先放入 `src/`，避免继续扩散到根目录脚本式实现。
+- `train.py`：模型训练入口，用于命令行开始训练
+- `infer.py`：模型推理入口，用于噪声去噪推理
+- `evaluate.py`：模型评估入口，用于预训练模型评估
 
 ## 5) 环境与依赖管理
 - Python 版本：`>=3.10`。
@@ -55,7 +55,7 @@
 - 统一入口参数风格（至少包含）：`--config`、`--seed`、`--device`、`--output-dir`。
 - 训练输出至少包含：checkpoint、训练日志、验证指标、最终配置快照。
 - 评估输出至少包含：样本级结果、聚合指标、可复现实验信息（模型版本 + 数据版本）。
-- `scripts/run_pipeline.py` 用于最小连通性验证，禁止在该入口堆叠复杂训练逻辑。
+- 最小连通性验证走 `tests/` 中的 smoke 测试，避免新增重复脚本入口。
 
 ## 9) 分布式、性能与可复现
 - 固定随机种子并记录到实验元数据（Python/NumPy/框架级种子）。
@@ -96,7 +96,7 @@
 - 严禁将无关重构与功能改动混在同一 PR。
 
 ## 14) Agent 执行规则（面向自动化协作）
-- 开始任务先阅读：`AGENTS.md`、`pyproject.toml`、相关 `scripts/` 与 `tests/`。
+- 开始任务先阅读：`AGENTS.md`、`pyproject.toml`、相关入口文件与 `tests/`。
 - 涉及第三方库时先查 Context7，再编码。
 - 优先做最小可验证改动，并同步更新必要测试与文档。
 - 不允许执行破坏性操作（如删除大批数据、覆盖外部参考资源）除非用户明确授权。
@@ -104,3 +104,27 @@
   - 受影响测试。
   - 至少一次入口脚本或 smoke 验证。
   - 变更摘要（改了什么、为什么、如何验证）。
+
+## 15) 当前统一扩散工程文件职责（本次实现）
+- `train.py`：三阶段训练入口，支持 `ecg_pretrain/ppg_pretrain/joint`、AMP、梯度裁剪、teacher prior、checkpoint 保存与恢复。
+- `infer.py`：推理入口，支持 ECG-only/PPG-only/joint 三种模式，支持 checkpoint 加载与结果落盘。
+- `utils.py`：根目录辅助函数，提供最小演示信号生成。
+- `src/ecg_ppg_denoise/config/config.py`：实验总配置定义、校验、JSON 读写。
+- `src/ecg_ppg_denoise/config/loader.py`：统一配置加载入口。
+- `src/ecg_ppg_denoise/config/schema.py`：配置 schema 兼容导出（供测试与旧调用路径）。
+- `src/ecg_ppg_denoise/data/multimodal_dataset.py`：`.npz/.pt/.npy` 通用数据集、滑窗切分、train/val 划分、合成数据回退。
+- `src/ecg_ppg_denoise/models/diffusion_schedule.py`：DDPM 1D 调度（线性 beta、q_sample、predict_x0_from_eps、p_sample）与 DDIM 预留接口。
+- `src/ecg_ppg_denoise/models/blocks.py`：基础网络块与共享主干 `UnifiedNoisePredictor1D`（1D U-Net + FiLM/AdaGN）。
+- `src/ecg_ppg_denoise/models/encoders.py`：ECG/PPG 条件编码器与质量评估器（输出 `q_map`、`q_score`）。
+- `src/ecg_ppg_denoise/models/fusion.py`：模态存在性 + 质量双重门控融合，含 missing token 与 joint 条件编码。
+- `src/ecg_ppg_denoise/models/unified_diffusion_model.py`：统一模型 `ModalityFlexibleConditionalDiffusion`，仅负责 forward、条件噪声预测与 `denoise_signal` 采样。
+- src/ecg_ppg_denoise/losses/masked_losses.py：支持 modality_mask 的 MSE/L1/导数损失。
+- src/ecg_ppg_denoise/losses/diffusion_losses.py：统一扩散训练损失计算器，负责随机时间步采样、q_sample、四类损失聚合与 teacher prior。
+- `src/ecg_ppg_denoise/trainers/runner.py`：训练引擎、阶段 mask 采样、smoke 运行器 `ExperimentRunner`。
+- `src/ecg_ppg_denoise/utils/common.py`：随机种子、设备解析、配置快照、checkpoint IO。
+- `src/ecg_ppg_denoise/utils/logging.py`：结构化日志构建。
+- `tests/test_multimodal_diffusion_smoke.py`：三模态 forward 与单步训练 smoke 测试。
+- `README.md`：项目说明、环境矩阵、训练/推理/测试命令、数据接口说明。
+- `requirements.in`：运行依赖输入清单。
+- `requirements-dev.in`：开发依赖输入清单。
+
