@@ -84,3 +84,4 @@ rnd_test.npy
 # =========================
 .DS_Store
 Thumbs.db
+/model/Score-based-ECG-Denoising/
