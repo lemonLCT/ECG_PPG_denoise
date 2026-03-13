@@ -9,7 +9,7 @@ src/data/qt-database-1.0.0/
 *.pkl
 
 artifacts/
-
+.codex_tmp/
 
 # =========================
 # Python 缓存与字节码
@@ -63,6 +63,7 @@ env/
 outputs/
 logs/
 data/
+tests/
 # 默认忽略源码包下的本地数据集，仅放行 Python 源文件和占位文件
 src/data/**
 !src/data/
