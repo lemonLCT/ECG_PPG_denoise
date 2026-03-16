@@ -109,7 +109,6 @@
 ## 15) 当前统一扩散工程文件职责（本次实现）
 - `train.py`：三阶段训练入口，支持 `ecg_pretrain/ppg_pretrain/joint`、AMP、梯度裁剪、teacher prior、checkpoint 保存与恢复。
 - `infer.py`：推理入口，支持 ECG-only/PPG-only/joint 三种模式，支持 checkpoint 加载与结果落盘。
-- `utils.py`：根目录辅助函数，提供最小演示信号生成。
 - `src/ecg_ppg_denoise/config/config.py`：实验总配置定义、校验、JSON 读写。
 - `src/ecg_ppg_denoise/config/loader.py`：统一配置加载入口。
 - `src/ecg_ppg_denoise/config/schema.py`：配置 schema 兼容导出（供测试与旧调用路径）。
