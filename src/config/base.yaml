@@ -1,5 +1,5 @@
 runtime:
-  experiment_name: fix_multimodal_diffusion
+  experiment_name: multimodal_diffusion
   seed: 42
   device: cpu
   use_amp: true
@@ -16,9 +16,9 @@ path:
   checkpoint_path: ""
   infer_input_path: ""
   eval_input_path: ""
-  train_output_dir: artifacts/runs/fix_train
-  infer_output_path: artifacts/infer/fix_denoised_result.npz
-  eval_output_dir: artifacts/eval_fix
+  train_output_dir: artifacts/runs/train
+  infer_output_path: artifacts/infer/denoised_result.npz
+  eval_output_dir: artifacts/eval
 
 loss:
   diffusion_weight: 1.0

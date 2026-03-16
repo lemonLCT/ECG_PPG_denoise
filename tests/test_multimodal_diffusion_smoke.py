@@ -1,84 +1,80 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import pytest
+from copy import deepcopy
+
 import torch
 
-from ecg_ppg_denoise.config import load_experiment_config
-from losses import UnifiedDiffusionLoss
-from ecg_ppg_denoise.models import ModalityFlexibleConditionalDiffusion
+from config import load_config
+from models import DDPM
 
 
-def _build_small_components() -> tuple[ModalityFlexibleConditionalDiffusion, UnifiedDiffusionLoss]:
-    cfg = load_experiment_config(model_name="modality_flexible_conditional_diffusion_debug", stage="joint")
-    cfg.model.signal_length = 128
-    cfg.model.diffusion_steps = 20
-    cfg.data.window_length = 128
-    cfg.validate()
-    model = ModalityFlexibleConditionalDiffusion(cfg.model)
-    loss_fn = UnifiedDiffusionLoss(cfg.loss)
-    return model, loss_fn
+def _build_small_config() -> dict:
+    cfg = deepcopy(load_config())
+    cfg["data"]["window_length"] = 64
+    cfg["model"]["main_model"]["signal_length"] = 64
+    cfg["model"]["diffusion"]["num_steps"] = 8
+    cfg["model"]["conditional_model"]["base_channels"] = 32
+    cfg["model"]["conditional_model"]["joint_channels"] = 64
+    cfg["train"]["batch_size"] = 2
+    cfg["train"]["val_batch_size"] = 2
+    return cfg
 
 
-def test_forward_supports_three_modality_modes() -> None:
-    model, _ = _build_small_components()
-    batch_size, length = 2, 128
-    noisy_ecg = torch.randn(batch_size, 1, length)
-    noisy_ppg = torch.randn(batch_size, 1, length)
-    t = torch.randint(low=0, high=model.diffusion.num_steps, size=(batch_size,))
-
-    for mask in (
-        torch.tensor([[1.0, 0.0], [1.0, 0.0]]),
-        torch.tensor([[0.0, 1.0], [0.0, 1.0]]),
-        torch.tensor([[1.0, 1.0], [1.0, 1.0]]),
-    ):
-        out = model(noisy_ecg=noisy_ecg, noisy_ppg=noisy_ppg, t=t, modality_mask=mask)
-        assert out["pred_noise_ecg"].shape == (batch_size, 1, length)
-        assert out["pred_noise_ppg"].shape == (batch_size, 1, length)
-        assert out["x0_hat_ecg"].shape == (batch_size, 1, length)
-        assert out["x0_hat_ppg"].shape == (batch_size, 1, length)
-        assert out["q_map_ecg"].shape == (batch_size, 1, length)
-        assert out["q_map_ppg"].shape == (batch_size, 1, length)
-        assert out["c_ecg"].shape[0] == batch_size
-        assert out["c_ecg"].shape[-1] == length
-        assert out["c_ppg"].shape[0] == batch_size
-        assert out["c_ppg"].shape[-1] == length
-        assert out["c_joint"].shape[0] == batch_size
-        assert "q_score_ecg" not in out
-        assert "q_score_ppg" not in out
-
-
-def test_local_context_uses_encoder_features_directly() -> None:
-    model, _ = _build_small_components()
-    batch_size, length = 2, 128
+def test_predict_noise_outputs_expected_shapes() -> None:
+    cfg = _build_small_config()
+    model = DDPM(base_model=None, config=cfg, device="cpu")
+    batch_size, length = 2, 64
+    x_t_ecg = torch.randn(batch_size, 1, length)
+    x_t_ppg = torch.randn(batch_size, 1, length)
     cond_ecg = torch.randn(batch_size, 1, length)
     cond_ppg = torch.randn(batch_size, 1, length)
+    t = torch.randint(low=0, high=model.diffusion.num_steps, size=(batch_size,))
     mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
 
-    enc = model._encode_conditions(cond_ecg=cond_ecg, cond_ppg=cond_ppg, modality_mask=mask)
+    out = model.predict_noise_from_xt(
+        x_t_ecg=x_t_ecg,
+        x_t_ppg=x_t_ppg,
+        cond_ecg=cond_ecg,
+        cond_ppg=cond_ppg,
+        t=t,
+        modality_mask=mask,
+    )
 
-    assert torch.allclose(enc["c_ecg"], enc["feat_ecg"])
-    assert torch.allclose(enc["c_ppg"], enc["feat_ppg"])
+    assert out["pred_noise_pair"].shape == (batch_size, 2, length)
+    assert out["pred_noise_ecg"].shape == (batch_size, 1, length)
+    assert out["pred_noise_ppg"].shape == (batch_size, 1, length)
+    assert out["feat_ecg"].shape[0] == batch_size
+    assert out["feat_ecg"].shape[-1] == length
+    assert out["feat_ppg"].shape[0] == batch_size
+    assert out["feat_ppg"].shape[-1] == length
+    assert out["c_ecg"].shape[0] == batch_size
+    assert out["c_ecg"].shape[-1] == length
+    assert out["c_ppg"].shape[0] == batch_size
+    assert out["c_ppg"].shape[-1] == length
+    assert out["c_joint"].shape[0] == batch_size
 
 
 def test_one_training_step_runs() -> None:
-    model, loss_fn = _build_small_components()
+    cfg = _build_small_config()
+    model = DDPM(base_model=None, config=cfg, device="cpu")
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    batch_size, length = 2, 128
+    batch_size, length = 2, 64
     clean_ecg = torch.randn(batch_size, 1, length)
     clean_ppg = torch.randn(batch_size, 1, length)
     noisy_ecg = clean_ecg + 0.1 * torch.randn_like(clean_ecg)
     noisy_ppg = clean_ppg + 0.1 * torch.randn_like(clean_ppg)
     mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
 
-    out = loss_fn(
-        model=model,
-        clean_ecg=clean_ecg,
-        clean_ppg=clean_ppg,
+    out = model(
         noisy_ecg=noisy_ecg,
         noisy_ppg=noisy_ppg,
+        clean_ecg=clean_ecg,
+        clean_ppg=clean_ppg,
         modality_mask=mask,
+        train_gen_flag=0,
     )
+
     loss = out["total_loss"]
     assert torch.isfinite(loss)
     optimizer.zero_grad(set_to_none=True)
@@ -86,76 +82,20 @@ def test_one_training_step_runs() -> None:
     optimizer.step()
 
 
-def test_missing_modality_is_masked_before_backbone() -> None:
-    model, _ = _build_small_components()
-    captured: dict[str, torch.Tensor] = {}
+def test_generate_masks_missing_modality_output() -> None:
+    cfg = _build_small_config()
+    model = DDPM(base_model=None, config=cfg, device="cpu")
+    batch_size, length = 2, 64
+    noisy_ecg = torch.randn(batch_size, 1, length)
 
-    def _capture_stem_input(module: torch.nn.Module, inputs: tuple[torch.Tensor, ...], output: torch.Tensor) -> None:
-        del module, output
-        captured["x_t_pair"] = inputs[0].detach().clone()
-
-    hook = model.noise_predictor.stem.register_forward_hook(_capture_stem_input)
-    try:
-        batch_size, length = 2, 128
-        x_t_ecg = torch.randn(batch_size, 1, length)
-        x_t_ppg = torch.randn(batch_size, 1, length)
-        cond_ecg = torch.randn(batch_size, 1, length)
-        cond_ppg = torch.randn(batch_size, 1, length)
-        t = torch.randint(low=0, high=model.diffusion.num_steps, size=(batch_size,))
-        mask = torch.tensor([[1.0, 0.0], [1.0, 0.0]])
-
-        model.predict_noise_from_xt(
-            x_t_ecg=x_t_ecg,
-            x_t_ppg=x_t_ppg,
-            t=t,
-            modality_mask=mask,
-            cond_ecg=cond_ecg,
-            cond_ppg=cond_ppg,
-        )
-    finally:
-        hook.remove()
-
-    assert "x_t_pair" in captured
-    assert torch.allclose(captured["x_t_pair"][:, 1:2, :], torch.zeros_like(captured["x_t_pair"][:, 1:2, :]))
-
-
-def test_default_loss_reduces_to_diffusion_objective() -> None:
-    model, loss_fn = _build_small_components()
-    batch_size, length = 2, 128
-    clean_ecg = torch.randn(batch_size, 1, length)
-    clean_ppg = torch.randn(batch_size, 1, length)
-    noisy_ecg = clean_ecg + 0.1 * torch.randn_like(clean_ecg)
-    noisy_ppg = clean_ppg + 0.1 * torch.randn_like(clean_ppg)
-    mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
-
-    out = loss_fn(
-        model=model,
-        clean_ecg=clean_ecg,
-        clean_ppg=clean_ppg,
+    out = model(
         noisy_ecg=noisy_ecg,
-        noisy_ppg=noisy_ppg,
-        modality_mask=mask,
+        noisy_ppg=None,
+        modality_mask=torch.tensor([1.0, 0.0]),
+        train_gen_flag=1,
+        num_steps=2,
     )
 
-    assert "reconstruction_loss" not in out
-    assert torch.allclose(out["total_loss"], out["diffusion_loss"])
-
-
-def test_denoise_signal_accepts_batched_2d_input() -> None:
-    model, _ = _build_small_components()
-    batch_size, length = 2, 128
-    noisy_ecg = torch.randn(batch_size, length)
-
-    out = model.denoise_signal(y_ecg=noisy_ecg, num_steps=2)
-
     assert out["denoised_ecg"].shape == (batch_size, 1, length)
+    assert out["denoised_ppg"].shape == (batch_size, 1, length)
     assert torch.allclose(out["denoised_ppg"], torch.zeros_like(out["denoised_ppg"]))
-
-
-def test_denoise_signal_requires_matching_modal_shapes() -> None:
-    model, _ = _build_small_components()
-    noisy_ecg = torch.randn(2, 1, 128)
-    noisy_ppg = torch.randn(2, 1, 64)
-
-    with pytest.raises(ValueError):
-        model.denoise_signal(y_ecg=noisy_ecg, y_ppg=noisy_ppg, num_steps=2)

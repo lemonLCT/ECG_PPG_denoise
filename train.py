@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 from torch.utils.data import DataLoader
@@ -13,13 +14,11 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from ecg_ppg_denoise.config import ExperimentConfig, load_experiment_config
-from ecg_ppg_denoise.data import build_train_val_datasets
-from losses import UnifiedDiffusionLoss
-from ecg_ppg_denoise.models import ModalityFlexibleConditionalDiffusion
-from ecg_ppg_denoise.trainers import TrainEngine
-from ecg_ppg_denoise.utils import (
-    build_logger,
+from config import load_config
+from dataset import build_qt_train_val_datasets, build_train_val_datasets
+from models import DDPM
+from trainers import TrainEngine
+from utils.common import (
     dump_config_snapshot,
     ensure_dir,
     load_checkpoint,
@@ -27,6 +26,7 @@ from ecg_ppg_denoise.utils import (
     save_checkpoint,
     seed_everything,
 )
+from utils.logging import build_logger
 
 
 def _git_sha() -> str:
@@ -41,10 +41,9 @@ def _git_sha() -> str:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="训练 ModalityFlexibleConditionalDiffusion")
+    parser = argparse.ArgumentParser(description="训练多模态扩散模型")
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
-    parser.add_argument("--model-name", type=str, default=None, help="YAML 中的模型配置名")
-    parser.add_argument("--stage", type=str, required=True, choices=["ecg_pretrain", "ppg_pretrain", "joint"])
+    parser.add_argument("--stage", type=str, default=None, choices=["ecg_pretrain", "ppg_pretrain", "joint"])
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default=None)
@@ -55,32 +54,46 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps-per-epoch", type=int, default=None)
     parser.add_argument("--resume", type=str, default=None, help="继续训练的 checkpoint 路径")
     parser.add_argument("--use-qt-dataset", action="store_true", help="启用 QT Data_Preparation 适配数据集")
-    parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本，1 或 2")
+    parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本")
     return parser.parse_args()
 
 
-def apply_overrides(cfg: ExperimentConfig, args: argparse.Namespace) -> ExperimentConfig:
+def apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
+    if args.stage is not None:
+        cfg["train"]["stage_name"] = args.stage
     if args.seed is not None:
-        cfg.runtime.seed = args.seed
+        cfg["runtime"]["seed"] = args.seed
     if args.device is not None:
-        cfg.runtime.device = args.device
+        cfg["runtime"]["device"] = args.device
     if args.output_dir is not None:
-        cfg.path.train_output_dir = args.output_dir
-        cfg.runtime.output_dir = args.output_dir
-    if args.data_path is not None:
-        cfg.path.dataset_path = args.data_path
-        cfg.data.data_path = args.data_path
+        cfg["path"]["train_output_dir"] = args.output_dir
+    if args.dataset_path is not None:
+        cfg["path"]["dataset_path"] = args.dataset_path
+        cfg["data"]["data_path"] = args.dataset_path
+    elif cfg["path"].get("dataset_path"):
+        cfg["data"]["data_path"] = cfg["path"]["dataset_path"]
     if args.epochs is not None:
-        cfg.train.epochs = args.epochs
+        cfg["train"]["epochs"] = args.epochs
     if args.batch_size is not None:
-        cfg.train.batch_size = args.batch_size
-        cfg.train.val_batch_size = args.batch_size
+        cfg["train"]["batch_size"] = args.batch_size
+        cfg["train"]["val_batch_size"] = args.batch_size
     if args.lr is not None:
-        cfg.train.lr = args.lr
+        cfg["train"]["lr"] = args.lr
     if args.max_steps_per_epoch is not None:
-        cfg.train.max_steps_per_epoch = args.max_steps_per_epoch
-    cfg.validate()
+        cfg["train"]["max_steps_per_epoch"] = args.max_steps_per_epoch
     return cfg
+
+
+def build_data_namespace(cfg: dict) -> SimpleNamespace:
+    return SimpleNamespace(
+        data_path=cfg["data"].get("data_path", ""),
+        num_workers=int(cfg["data"]["num_workers"]),
+        val_ratio=float(cfg["data"]["val_ratio"]),
+        window_length=int(cfg["data"]["window_length"]),
+        window_stride=int(cfg["data"]["window_stride"]),
+        synthetic_num_samples=int(cfg["data"]["synthetic_num_samples"]),
+    )
+
 
 def build_grad_scaler(enabled: bool) -> torch.cuda.amp.GradScaler:
     try:
@@ -91,46 +104,52 @@ def build_grad_scaler(enabled: bool) -> torch.cuda.amp.GradScaler:
 
 def main() -> int:
     args = parse_args()
-    config_path = Path(args.config) if args.config else None
-    cfg = load_experiment_config(config_path=config_path, model_name=args.model_name, stage=args.stage)
+    cfg = load_config(Path(args.config) if args.config else None)
     cfg = apply_overrides(cfg, args)
 
     logger = build_logger("train")
-    device = resolve_device(cfg.runtime.device)
-    seed_everything(cfg.runtime.seed)
-    output_dir = ensure_dir(cfg.path.train_output_dir)
+    device = resolve_device(cfg["runtime"]["device"])
+    seed_everything(int(cfg["runtime"]["seed"]))
+    output_dir = ensure_dir(cfg["path"]["train_output_dir"])
     ckpt_dir = ensure_dir(output_dir / "checkpoints")
     dump_config_snapshot(cfg, output_dir)
 
     logger.info("Git SHA: %s", _git_sha())
-    logger.info("设备: %s | 阶段: %s", device, args.stage)
+    logger.info("设备: %s | 阶段: %s", device, cfg["train"]["stage_name"])
     logger.info("输出目录: %s", output_dir)
 
-    train_ds, val_ds = build_train_val_datasets(
-        cfg.data,
-        seed=cfg.runtime.seed,
-        use_qt_dataset=args.use_qt_dataset,
-        qt_noise_version=args.qt_noise_version,
-    )
+    data_cfg = build_data_namespace(cfg)
+    if args.use_qt_dataset:
+        train_ds, val_ds = build_qt_train_val_datasets(noise_version=args.qt_noise_version)
+    else:
+        train_ds, val_ds = build_train_val_datasets(
+            data_cfg,
+            seed=int(cfg["runtime"]["seed"]),
+            use_qt_dataset=False,
+            qt_noise_version=args.qt_noise_version,
+        )
     train_loader = DataLoader(
         train_ds,
-        batch_size=cfg.train.batch_size,
+        batch_size=int(cfg["train"]["batch_size"]),
         shuffle=True,
-        num_workers=cfg.data.num_workers,
+        num_workers=int(cfg["data"]["num_workers"]),
         pin_memory=(device.type == "cuda"),
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=cfg.train.val_batch_size,
+        batch_size=int(cfg["train"]["val_batch_size"]),
         shuffle=False,
-        num_workers=cfg.data.num_workers,
+        num_workers=int(cfg["data"]["num_workers"]),
         pin_memory=(device.type == "cuda"),
     )
 
-    model = ModalityFlexibleConditionalDiffusion(cfg.model).to(device)
-    loss_fn = UnifiedDiffusionLoss(cfg.loss).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
-    scaler = build_grad_scaler(enabled=cfg.runtime.use_amp and device.type == "cuda")
+    model = DDPM(base_model=None, config=cfg, device=device).to(device)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=float(cfg["train"]["lr"]),
+        weight_decay=float(cfg["train"]["weight_decay"]),
+    )
+    scaler = build_grad_scaler(enabled=bool(cfg["runtime"]["use_amp"]) and device.type == "cuda")
 
     start_epoch = 0
     global_step = 0
@@ -138,35 +157,35 @@ def main() -> int:
         payload = load_checkpoint(args.resume, model=model, optimizer=optimizer, scaler=scaler, map_location=device)
         start_epoch = int(payload.get("epoch", 0)) + 1
         global_step = int(payload.get("global_step", 0))
-        logger.info("已恢复训练: epoch=%d, global_step=%d", start_epoch, global_step)
+        logger.info("已恢复训练 epoch=%d global_step=%d", start_epoch, global_step)
 
     engine = TrainEngine(
         model=model,
-        loss_fn=loss_fn,
         optimizer=optimizer,
         scaler=scaler,
         device=device,
-        stage=args.stage,
-        modality_dropout=cfg.train.modality_dropout,
-        use_amp=cfg.runtime.use_amp,
-        grad_clip=cfg.train.grad_clip,
+        stage=cfg["train"]["stage_name"],
+        modality_dropout=float(cfg["train"]["modality_dropout"]),
+        use_amp=bool(cfg["runtime"]["use_amp"]),
+        grad_clip=float(cfg["train"]["grad_clip"]),
     )
 
     best_val = float("inf")
-    for epoch in range(start_epoch, cfg.train.epochs):
-        logger.info("==== Epoch %d/%d ====", epoch + 1, cfg.train.epochs)
+    epochs = int(cfg["train"]["epochs"])
+    max_steps_per_epoch = int(cfg["train"]["max_steps_per_epoch"])
+    for epoch in range(start_epoch, epochs):
+        logger.info("==== Epoch %d/%d ====", epoch + 1, epochs)
         train_metrics = engine.train_one_epoch(
             dataloader=train_loader,
-            max_steps=cfg.train.max_steps_per_epoch,
-            log_interval=cfg.train.log_interval,
+            max_steps=max_steps_per_epoch,
             logger=logger,
         )
         val_metrics = engine.validate_one_epoch(
             dataloader=val_loader,
-            max_steps=max(1, cfg.train.max_steps_per_epoch // 2),
+            max_steps=max(1, max_steps_per_epoch // 2),
             logger=logger,
         )
-        global_step += cfg.train.max_steps_per_epoch
+        global_step += max_steps_per_epoch
 
         latest_path = ckpt_dir / "latest.pt"
         save_checkpoint(
@@ -179,7 +198,7 @@ def main() -> int:
             config=cfg,
         )
 
-        if (epoch + 1) % cfg.train.save_every_epochs == 0:
+        if (epoch + 1) % int(cfg["train"]["save_every_epochs"]) == 0:
             epoch_path = ckpt_dir / f"epoch_{epoch + 1:04d}.pt"
             save_checkpoint(
                 path=epoch_path,

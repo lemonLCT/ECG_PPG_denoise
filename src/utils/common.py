@@ -1,22 +1,17 @@
-"""通用工具函数。"""
-
 from __future__ import annotations
 
 import os
 import random
-from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import torch
 import yaml
 
-from config import ExperimentConfig
-
 
 def seed_everything(seed: int) -> None:
-    """固定随机种子，尽量保证实验可复现。"""
+    """固定随机种子。"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -33,20 +28,17 @@ def resolve_device(device: str) -> torch.device:
 
 
 def ensure_dir(path: str | Path) -> Path:
-    """确保目录存在，并返回 `Path` 对象。"""
+    """确保目录存在，并返回 `Path`。"""
     target = Path(path)
     target.mkdir(parents=True, exist_ok=True)
     return target
 
 
-def dump_config_snapshot(config: ExperimentConfig, output_dir: str | Path) -> Path:
-    """将实验配置写入 YAML 快照。"""
+def dump_config_snapshot(config: dict[str, Any], output_dir: str | Path) -> Path:
+    """将配置字典写入 YAML 快照。"""
     out_dir = ensure_dir(output_dir)
     target = out_dir / "config_snapshot.yaml"
-    target.write_text(
-        yaml.safe_dump(asdict(config), allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
+    target.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
     return target
 
 
@@ -57,9 +49,9 @@ def save_checkpoint(
     scaler: torch.cuda.amp.GradScaler | None,
     epoch: int,
     global_step: int,
-    config: ExperimentConfig,
+    config: dict[str, Any],
 ) -> Path:
-    """保存训练 checkpoint。"""
+    """保存 checkpoint。"""
     ckpt_path = Path(path)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
@@ -67,7 +59,7 @@ def save_checkpoint(
         "global_step": global_step,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
-        "config": asdict(config),
+        "config": config,
     }
     if scaler is not None:
         payload["scaler"] = scaler.state_dict()
@@ -82,7 +74,7 @@ def load_checkpoint(
     scaler: torch.cuda.amp.GradScaler | None = None,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
-    """加载 checkpoint，并按需恢复优化器与缩放器状态。"""
+    """加载 checkpoint，并按需恢复优化器与 scaler。"""
     payload = torch.load(path, map_location=map_location)
     model.load_state_dict(payload["model"])
     if optimizer is not None and "optimizer" in payload:
@@ -92,8 +84,8 @@ def load_checkpoint(
     return payload
 
 
-def generate_demo_signals(batch_size: int = 1, signal_length: int = 512, seed: int = 42) -> Dict[str, torch.Tensor]:
-    """生成最小可运行的 ECG/PPG 带噪示例信号。"""
+def generate_demo_signals(batch_size: int = 1, signal_length: int = 512, seed: int = 42) -> dict[str, torch.Tensor]:
+    """生成最小可运行 ECG/PPG 带噪示例信号。"""
     rng = np.random.default_rng(seed)
     t = np.linspace(0.0, 1.0, signal_length, dtype=np.float32)[None, :]
     freqs = rng.uniform(1.0, 4.0, size=(batch_size, 1)).astype(np.float32)

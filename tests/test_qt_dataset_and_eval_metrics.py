@@ -1,12 +1,16 @@
-"""QT 适配与评估指标 smoke 测试。"""
-
 from __future__ import annotations
 
 import numpy as np
+import torch
 from pathlib import Path
 import sys
 
-from ecg_ppg_denoise.data.QT_dataset import QTCompatibleDataset, unpack_qt_return
+SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+sys.modules.pop("utils", None)
+
+from dataset import QTDataset, unpack_qt_return
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -15,27 +19,26 @@ if str(PROJECT_ROOT) not in sys.path:
 from evaluate import compute_ecg_metrics
 
 
-def test_qt_unpack_and_dataset_shapes() -> None:
-    n, t = 4, 512
-    x_train = np.random.randn(n, t, 1).astype(np.float32)
-    y_train = np.random.randn(n, t, 1).astype(np.float32)
-    x_test = np.random.randn(n, t, 1).astype(np.float32)
-    y_test = np.random.randn(n, t, 1).astype(np.float32)
+def test_unpack_qt_return_and_dataset_shapes() -> None:
+    x_train = np.ones((2, 16), dtype=np.float32)
+    y_train = np.zeros((2, 16), dtype=np.float32)
+    x_test = np.ones((1, 16), dtype=np.float32)
+    y_test = np.zeros((1, 16), dtype=np.float32)
 
-    x_train_cf, y_train_cf, x_test_cf, y_test_cf = unpack_qt_return([x_train, y_train, x_test, y_test])
-    assert x_train_cf.shape == (n, 1, t)
-    assert y_train_cf.shape == (n, 1, t)
-    assert x_test_cf.shape == (n, 1, t)
-    assert y_test_cf.shape == (n, 1, t)
+    train_x, train_y, test_x, test_y = unpack_qt_return((x_train, y_train, x_test, y_test))
+    assert train_x.shape == (2, 1, 16)
+    assert train_y.shape == (2, 1, 16)
+    assert test_x.shape == (1, 1, 16)
+    assert test_y.shape == (1, 1, 16)
 
-    ds = QTCompatibleDataset(noisy_ecg=x_train_cf, clean_ecg=y_train_cf)
-    sample = ds[0]
-    assert sample["clean_ecg"].shape == (1, t)
-    assert sample["noisy_ecg"].shape == (1, t)
-    assert sample["clean_ppg"].shape == (1, t)
-    assert sample["noisy_ppg"].shape == (1, t)
-    assert float(sample["clean_ppg"].abs().sum().item()) == 0.0
-    assert sample["modality_mask"].tolist() == [1.0, 0.0]
+    dataset = QTDataset(noisy_ecg=x_train, clean_ecg=y_train)
+    sample = dataset[1]
+    assert set(sample.keys()) == {"clean_ecg", "noisy_ecg", "clean_ppg", "noisy_ppg", "modality_mask"}
+    assert sample["clean_ecg"].shape == (1, 16)
+    assert sample["noisy_ecg"].shape == (1, 16)
+    assert sample["clean_ppg"].shape == (1, 16)
+    assert sample["noisy_ppg"].shape == (1, 16)
+    assert torch.equal(sample["modality_mask"], torch.tensor([1.0, 0.0], dtype=torch.float32))
 
 
 def test_compute_ecg_metrics_has_expected_keys() -> None:
