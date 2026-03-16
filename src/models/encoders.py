@@ -52,6 +52,11 @@ class SignalConditionEncoder1D(nn.Module):
             self.out_channels = self.concat_channels
 
     def forward(self, x: Tensor) -> Tensor:
+        """
+        输入 `x:[B,1,T]`。
+        每个分支输出 `[B,branch_channels,T]`，拼接后为 `[B,concat_channels,T]`，
+        若启用 projection，则最终输出 `[B,out_channels,T]`，否则输出 `[B,concat_channels,T]`。
+        """
         branch_outputs = [conv(x) for conv in self.conv_layers]
         features = torch.cat(branch_outputs, dim=1)
         return self.output_projection(features)

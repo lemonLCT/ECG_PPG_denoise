@@ -17,4 +17,5 @@ class QualityAssessor1D(nn.Module):
         self.act = nn.Sigmoid()
 
     def forward(self, x: Tensor) -> Tensor:
+        """输入特征 `x:[B,C,T]`，输出局部质量图 `q_map:[B,1,T]`。"""
         return self.act(self.net(x))

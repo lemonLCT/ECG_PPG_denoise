@@ -4,8 +4,8 @@
 model/
 AGENTS.md
 IMPLEMENTATION_PLAN.md
-src/data/mit-bih-noise-stress-test-database-1.0.0/
-src/data/qt-database-1.0.0/
+data/db/QTDB/mit-bih-noise-stress-test-database-1.0.0/
+data/db/QTDB/qt-database-1.0.0/
 *.pkl
 
 artifacts/
@@ -65,17 +65,17 @@ logs/
 data/
 tests/
 # 默认忽略源码包下的本地数据集，仅放行 Python 源文件和占位文件
-src/data/**
-!src/data/
-!src/data/**/
+src/dataset/**
+!src/dataset/
+!src/dataset/**/
 !src/ecg_ppg_denoise/data/*.py
 !src/ecg_ppg_denoise/data/**/*.py
-!src/data/.gitkeep
-src/data/qt-database-1.0.0/
-src/data/mit-bih-noise-stress-test-database-1.0.0/
-src/data/QTDatabase.pkl
-src/data/NoiseBWL.pkl
-src/data/rnd_test.npy
+!src/dataset/.gitkeep
+data/db/QTDB/qt-database-1.0.0/
+data/db/QTDB/mit-bih-noise-stress-test-database-1.0.0/
+src/dataset/QTDatabase.pkl
+src/dataset/NoiseBWL.pkl
+src/dataset/rnd_test.npy
 QTDatabase.pkl
 NoiseBWL.pkl
 rnd_test.npy

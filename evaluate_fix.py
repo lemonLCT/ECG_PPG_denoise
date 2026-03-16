@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -14,17 +14,17 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from ecg_ppg_denoise.config import load_experiment_config
-from ecg_ppg_denoise.data import build_qt_train_val_datasets, load_multimodal_arrays
-from ecg_ppg_denoise.models import ModalityFlexibleConditionalDiffusion
-from ecg_ppg_denoise.utils import build_logger, ensure_dir, resolve_device
-from ecg_ppg_denoise.utils.metrics import COS_SIM, MAD, PRD, SNR, SNR_improvement, SSD
+from config import load_fix_config
+from dataset import build_qt_train_val_datasets, load_multimodal_arrays
+from fix_model import DDPM
+from utils.fix_runtime import ensure_dir_fix, resolve_device_fix
+from utils.logging import build_logger
+from utils.metrics import COS_SIM, MAD, PRD, SNR, SNR_improvement, SSD
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="评估 ECG 去噪指标")
-    parser.add_argument("--config", type=str, default=None, help="YAML 配置路径")
-    parser.add_argument("--model-name", type=str, default=None, help="YAML 中的模型配置名")
+    parser = argparse.ArgumentParser(description="评估 fix 版 ECG 去噪指标")
+    parser.add_argument("--config", type=str, default=None, help="fix YAML 配置文件路径")
     parser.add_argument("--checkpoint", type=str, default=None, help="模型 checkpoint 路径")
     parser.add_argument("--input-path", type=str, default=None, help="输入数据(.npz/.pt/.npy)")
     parser.add_argument("--use-qt-dataset", action="store_true", help="使用 QT Data_Preparation 评估集")
@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _stack_from_qt_val(noise_version: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _stack_from_qt_val(noise_version: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     _, val_ds = build_qt_train_val_datasets(noise_version=noise_version)
     clean_ecg = val_ds.clean_ecg.detach().cpu().numpy()
     noisy_ecg = val_ds.noisy_ecg.detach().cpu().numpy()
@@ -47,13 +47,12 @@ def _stack_from_qt_val(noise_version: int) -> Tuple[np.ndarray, np.ndarray, np.n
     return clean_ecg, noisy_ecg, noisy_ppg
 
 
-def _load_eval_arrays(args: argparse.Namespace) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _load_eval_arrays(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if args.use_qt_dataset:
         return _stack_from_qt_val(noise_version=args.qt_noise_version)
-    input_path = args.input_path
-    if input_path is None:
+    if args.input_path is None:
         raise ValueError("未启用 --use-qt-dataset 时，必须提供 --input-path")
-    arrays = load_multimodal_arrays(input_path)
+    arrays = load_multimodal_arrays(args.input_path)
     return arrays["clean_ecg"], arrays["noisy_ecg"], arrays["noisy_ppg"]
 
 
@@ -61,12 +60,12 @@ def _select_inputs(
     mode: str,
     noisy_ecg: torch.Tensor,
     noisy_ppg: torch.Tensor,
-) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+) -> tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
     if mode == "ecg":
-        return noisy_ecg, None
+        return noisy_ecg, None, torch.tensor([1.0, 0.0], device=noisy_ecg.device)
     if mode == "ppg":
-        return None, noisy_ppg
-    return noisy_ecg, noisy_ppg
+        return None, noisy_ppg, torch.tensor([0.0, 1.0], device=noisy_ppg.device)
+    return noisy_ecg, noisy_ppg, torch.tensor([1.0, 1.0], device=noisy_ecg.device)
 
 
 def _safe_mean(x: np.ndarray) -> float:
@@ -77,11 +76,10 @@ def _safe_mean(x: np.ndarray) -> float:
     return float(np.mean(arr))
 
 
-def compute_ecg_metrics(clean_ecg: np.ndarray, noisy_ecg: np.ndarray, denoised_ecg: np.ndarray) -> Dict[str, float]:
+def compute_ecg_metrics(clean_ecg: np.ndarray, noisy_ecg: np.ndarray, denoised_ecg: np.ndarray) -> dict[str, float]:
     y_clean = clean_ecg.reshape(clean_ecg.shape[0], -1)
     y_noisy = noisy_ecg.reshape(noisy_ecg.shape[0], -1)
     y_denoised = denoised_ecg.reshape(denoised_ecg.shape[0], -1)
-
     return {
         "SSD": _safe_mean(SSD(y_clean, y_denoised)),
         "MAD": _safe_mean(MAD(y_clean, y_denoised)),
@@ -95,32 +93,28 @@ def compute_ecg_metrics(clean_ecg: np.ndarray, noisy_ecg: np.ndarray, denoised_e
 
 def main() -> int:
     args = parse_args()
-    cfg = load_experiment_config(
-        config_path=Path(args.config) if args.config else None,
-        model_name=args.model_name,
-    )
+    cfg = load_fix_config(Path(args.config) if args.config else None)
     if args.device is not None:
-        cfg.runtime.device = args.device
-    cfg.validate()
+        cfg["runtime"]["device"] = args.device
 
-    logger = build_logger("evaluate")
-    device = resolve_device(cfg.runtime.device)
+    logger = build_logger("evaluate_fix")
+    device = resolve_device_fix(cfg["runtime"]["device"])
 
-    checkpoint_path = args.checkpoint or cfg.path.checkpoint_path
+    checkpoint_path = args.checkpoint or cfg["path"]["checkpoint_path"]
     if not checkpoint_path:
         raise ValueError("必须通过 --checkpoint 或 config.path.checkpoint_path 提供模型权重路径")
     ckpt_path = Path(checkpoint_path)
     if not ckpt_path.exists():
         raise FileNotFoundError(f"checkpoint 不存在: {ckpt_path}")
 
-    model = ModalityFlexibleConditionalDiffusion(cfg.model).to(device)
+    model = DDPM(base_model=None, config=cfg, device=device).to(device)
     payload = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(payload["model"])
     model.eval()
     logger.info("加载 checkpoint: %s", ckpt_path)
 
-    if args.input_path is None and cfg.path.eval_input_path:
-        args.input_path = cfg.path.eval_input_path
+    if args.input_path is None and cfg["path"]["eval_input_path"]:
+        args.input_path = cfg["path"]["eval_input_path"]
     clean_ecg, noisy_ecg, noisy_ppg = _load_eval_arrays(args)
     if args.max_samples > 0:
         clean_ecg = clean_ecg[: args.max_samples]
@@ -132,12 +126,14 @@ def main() -> int:
         end = min(clean_ecg.shape[0], start + args.batch_size)
         ecg_batch = torch.from_numpy(noisy_ecg[start:end]).float().to(device)
         ppg_batch = torch.from_numpy(noisy_ppg[start:end]).float().to(device)
-        y_ecg, y_ppg = _select_inputs(args.mode, ecg_batch, ppg_batch)
+        y_ecg, y_ppg, modality_mask = _select_inputs(args.mode, ecg_batch, ppg_batch)
 
         with torch.no_grad():
-            result = model.denoise_signal(
-                y_ecg=y_ecg,
-                y_ppg=y_ppg,
+            result = model(
+                noisy_ecg=y_ecg,
+                noisy_ppg=y_ppg,
+                modality_mask=modality_mask,
+                train_gen_flag=1,
                 num_steps=args.num_steps,
                 use_ddim=args.use_ddim,
             )
@@ -147,11 +143,11 @@ def main() -> int:
     metrics = compute_ecg_metrics(clean_ecg=clean_ecg, noisy_ecg=noisy_ecg, denoised_ecg=denoised_ecg)
     logger.info("ECG 评估指标: %s", metrics)
 
-    out_dir = ensure_dir(args.output_dir or cfg.path.eval_output_dir)
-    metrics_path = out_dir / "metrics.json"
+    out_dir = ensure_dir_fix(args.output_dir or cfg["path"]["eval_output_dir"])
+    metrics_path = out_dir / "metrics_fix.json"
     metrics_path.write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     np.savez(
-        out_dir / "eval_outputs.npz",
+        out_dir / "eval_outputs_fix.npz",
         clean_ecg=clean_ecg,
         noisy_ecg=noisy_ecg,
         denoised_ecg=denoised_ecg,

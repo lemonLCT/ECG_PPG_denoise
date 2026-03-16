@@ -191,7 +191,7 @@ class ExperimentConfig:
     @classmethod
     def from_flat_dict(cls: Type[T], payload: Dict[str, Any]) -> T:
         runtime = RuntimeConfig(**payload.get("runtime", {}))
-        data = DataConfig(**payload.get("data", {}))
+        data = DataConfig(**payload.get("dataset", {}))
         path = PathConfig(**payload.get("path", {}))
 
         model_payload = dict(payload.get("model", {}))

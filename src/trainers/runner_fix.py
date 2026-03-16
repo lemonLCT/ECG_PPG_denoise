@@ -6,11 +6,8 @@ from typing import Dict, Optional
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from config import ExperimentConfig
-from losses import UnifiedDiffusionLoss
-from models import ModalityFlexibleConditionalDiffusion
+from fix_model import DDPM
 
 
 class _NullAutocast:
@@ -32,7 +29,8 @@ def _build_autocast(enabled: bool):
         return torch.cuda.amp.autocast(enabled=True)
 
 
-def sample_modality_mask(batch_size: int, stage: str, device: torch.device, dropout_prob: float = 0.0) -> Tensor:
+def sample_modality_mask_fix(batch_size: int, stage: str, device: torch.device, dropout_prob: float = 0.0) -> Tensor:
+    """按训练阶段采样模态存在性掩码，输出 `mask:[B,2]`。"""
     if stage == "ecg_pretrain":
         return torch.tensor([1.0, 0.0], device=device).repeat(batch_size, 1)
     if stage == "ppg_pretrain":
@@ -55,13 +53,12 @@ def sample_modality_mask(batch_size: int, stage: str, device: torch.device, drop
     return mask
 
 
-class TrainEngine:
-    """单机训练循环封装。"""
+class TrainEngineFix:
+    """fix 版单机训练循环封装。"""
 
     def __init__(
         self,
-        model: ModalityFlexibleConditionalDiffusion,
-        loss_fn: UnifiedDiffusionLoss,
+        model: DDPM,
         optimizer: torch.optim.Optimizer,
         scaler: Optional[torch.cuda.amp.GradScaler],
         device: torch.device,
@@ -71,7 +68,6 @@ class TrainEngine:
         grad_clip: float,
     ) -> None:
         self.model = model
-        self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.scaler = scaler
         self.device = device
@@ -85,22 +81,16 @@ class TrainEngine:
 
     def train_one_epoch(self, dataloader: DataLoader, max_steps: int, log_interval: int, logger: logging.Logger) -> Dict[str, float]:
         self.model.train()
-
-        sums = {
-            "total_loss": 0.0,
-            "diffusion_loss": 0.0,
-            "derivative_loss": 0.0,
-        }
+        sums = {"total_loss": 0.0, "diffusion_loss": 0.0, "derivative_loss": 0.0}
         step_count = 0
 
-        progress = tqdm(dataloader, desc=f"train-{self.stage}", leave=False)
-        for step, batch in enumerate(progress):
+        for step, batch in enumerate(dataloader):
             if step >= max_steps:
                 break
             step_count += 1
             batch = self._move_batch(batch)
             batch_size = batch["clean_ecg"].shape[0]
-            modality_mask = sample_modality_mask(
+            modality_mask = sample_modality_mask_fix(
                 batch_size=batch_size,
                 stage=self.stage,
                 device=self.device,
@@ -109,13 +99,13 @@ class TrainEngine:
 
             self.optimizer.zero_grad(set_to_none=True)
             with _build_autocast(enabled=self.use_amp):
-                outputs = self.loss_fn(
-                    model=self.model,
-                    clean_ecg=batch["clean_ecg"],
-                    clean_ppg=batch["clean_ppg"],
+                outputs = self.model(
                     noisy_ecg=batch["noisy_ecg"],
                     noisy_ppg=batch["noisy_ppg"],
+                    clean_ecg=batch["clean_ecg"],
+                    clean_ppg=batch["clean_ppg"],
                     modality_mask=modality_mask,
+                    train_gen_flag=0,
                 )
                 loss = outputs["total_loss"]
 
@@ -134,7 +124,13 @@ class TrainEngine:
                 sums[key] += float(outputs[key].detach().cpu().item())
 
             if step_count % log_interval == 0:
-                progress.set_postfix({"loss": f"{sums['total_loss'] / step_count:.4f}"})
+                logger.info(
+                    "train step=%d total=%.6f diffusion=%.6f derivative=%.6f",
+                    step_count,
+                    sums["total_loss"] / step_count,
+                    sums["diffusion_loss"] / step_count,
+                    sums["derivative_loss"] / step_count,
+                )
 
         if step_count == 0:
             step_count = 1
@@ -145,29 +141,24 @@ class TrainEngine:
     @torch.no_grad()
     def validate_one_epoch(self, dataloader: DataLoader, max_steps: int, logger: logging.Logger) -> Dict[str, float]:
         self.model.eval()
-        sums = {
-            "total_loss": 0.0,
-            "diffusion_loss": 0.0,
-            "derivative_loss": 0.0,
-        }
+        sums = {"total_loss": 0.0, "diffusion_loss": 0.0, "derivative_loss": 0.0}
         step_count = 0
 
-        progress = tqdm(dataloader, desc=f"val-{self.stage}", leave=False)
-        for step, batch in enumerate(progress):
+        for step, batch in enumerate(dataloader):
             if step >= max_steps:
                 break
             step_count += 1
             batch = self._move_batch(batch)
             batch_size = batch["clean_ecg"].shape[0]
-            modality_mask = sample_modality_mask(batch_size=batch_size, stage=self.stage, device=self.device, dropout_prob=0.0)
+            modality_mask = sample_modality_mask_fix(batch_size=batch_size, stage=self.stage, device=self.device, dropout_prob=0.0)
 
-            outputs = self.loss_fn(
-                model=self.model,
-                clean_ecg=batch["clean_ecg"],
-                clean_ppg=batch["clean_ppg"],
+            outputs = self.model(
                 noisy_ecg=batch["noisy_ecg"],
                 noisy_ppg=batch["noisy_ppg"],
+                clean_ecg=batch["clean_ecg"],
+                clean_ppg=batch["clean_ppg"],
                 modality_mask=modality_mask,
+                train_gen_flag=0,
             )
             for key in sums:
                 sums[key] += float(outputs[key].detach().cpu().item())
@@ -179,29 +170,30 @@ class TrainEngine:
         return metrics
 
 
-class ExperimentRunner:
-    """最小 smoke 运行器。"""
+class ExperimentRunnerFix:
+    """fix 版最小 smoke 运行器。"""
 
-    def __init__(self, config: ExperimentConfig, logger: logging.Logger) -> None:
+    def __init__(self, config: dict, logger: logging.Logger) -> None:
         self.config = config
         self.logger = logger
 
     def run_smoke(self) -> None:
         device = torch.device("cpu")
-        model = ModalityFlexibleConditionalDiffusion(self.config.model).to(device)
-        loss_fn = UnifiedDiffusionLoss(self.config.loss).to(device)
-        batch_size, length = 2, self.config.data.window_length
+        model = DDPM(base_model=None, config=self.config, device=device).to(device)
+        batch_size = 2
+        length = int(self.config["data"]["window_length"])
         clean_ecg = torch.randn(batch_size, 1, length, device=device)
         clean_ppg = torch.randn(batch_size, 1, length, device=device)
         noisy_ecg = clean_ecg + 0.1 * torch.randn_like(clean_ecg)
         noisy_ppg = clean_ppg + 0.1 * torch.randn_like(clean_ppg)
         modality_mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]], device=device)
-        outputs = loss_fn(
-            model=model,
-            clean_ecg=clean_ecg,
-            clean_ppg=clean_ppg,
+
+        outputs = model(
             noisy_ecg=noisy_ecg,
             noisy_ppg=noisy_ppg,
+            clean_ecg=clean_ecg,
+            clean_ppg=clean_ppg,
             modality_mask=modality_mask,
+            train_gen_flag=0,
         )
-        self.logger.info("smoke 通过，总损失 %.6f", outputs["total_loss"].item())
+        self.logger.info("fix smoke 通过，总损失 %.6f", outputs["total_loss"].item())

@@ -87,7 +87,7 @@ def load_experiment_config(
     payload = _read_yaml_payload(config_path)
     flat_payload = {
         "runtime": deepcopy(payload.get("runtime", {})),
-        "data": deepcopy(payload.get("data", {})),
+        "dataset": deepcopy(payload.get("dataset", {})),
         "path": deepcopy(payload.get("path", {})),
         "loss": deepcopy(payload.get("loss", {})),
         "model": select_model_section(payload, model_name=model_name),

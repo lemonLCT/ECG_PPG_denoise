@@ -5,8 +5,7 @@ from typing import Dict, Optional
 import torch
 from torch import Tensor, nn
 
-from config import LossConfig, ModelConfig
-from losses import masked_derivative_l1, masked_mse
+from config import ModelConfig
 from models.blocks import UnifiedNoisePredictor1D
 from models.diffusion_schedule import DiffusionSchedule1D
 from models.encoders import SignalConditionEncoder1D
@@ -16,10 +15,9 @@ from models.quality_assessor import QualityAssessor1D
 class ModalityFlexibleConditionalDiffusion(nn.Module):
     """统一的 ECG/PPG 条件扩散模型。"""
 
-    def __init__(self, model_cfg: ModelConfig, loss_cfg: Optional[LossConfig] = None) -> None:
+    def __init__(self, model_cfg: ModelConfig) -> None:
         super().__init__()
         self.model_cfg = model_cfg
-        self.loss_cfg = loss_cfg or LossConfig()
         self.cond_channels = self._resolve_cond_channels(model_cfg)
 
         self.ecg_encoder = SignalConditionEncoder1D(
@@ -87,6 +85,7 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
 
     @staticmethod
     def _ensure_3d(x: Tensor, name: str) -> Tensor:
+        """将输入规范到 `[B,1,T]`。支持 `[B,T] -> [B,1,T]`。"""
         if x.ndim == 2:
             x = x.unsqueeze(1)
         if x.ndim != 3:
@@ -95,6 +94,7 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
 
     @staticmethod
     def build_modality_mask(has_ecg: bool, has_ppg: bool, batch_size: int, device: torch.device) -> Tensor:
+        """构造模态掩码 `modality_mask:[B,2]`，列顺序为 `[ecg, ppg]`。"""
         mask = torch.zeros(batch_size, 2, dtype=torch.float32, device=device)
         mask[:, 0] = 1.0 if has_ecg else 0.0
         mask[:, 1] = 1.0 if has_ppg else 0.0
@@ -104,14 +104,26 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
 
     @staticmethod
     def _signal_mask(modality_mask: Tensor, index: int, ref: Tensor) -> Tensor:
+        """将 `modality_mask[:,index]` 扩展成与信号广播兼容的 `[B,1,1]`。"""
         return modality_mask[:, index].to(dtype=ref.dtype, device=ref.device).view(-1, 1, 1)
 
     def _mask_signal_pair(self, ecg: Tensor, ppg: Tensor, modality_mask: Tensor) -> tuple[Tensor, Tensor]:
+        """输入 `ecg/ppg:[B,1,T]`，输出按模态掩码置零后的同形状张量。"""
         ecg_mask = self._signal_mask(modality_mask, 0, ecg)
         ppg_mask = self._signal_mask(modality_mask, 1, ppg)
         return ecg * ecg_mask, ppg * ppg_mask
 
     def _encode_conditions(self, cond_ecg: Tensor, cond_ppg: Tensor, modality_mask: Tensor) -> Dict[str, Tensor]:
+        """
+        输入:
+        - `cond_ecg/cond_ppg:[B,1,T]`
+        - `modality_mask:[B,2]`
+        输出:
+        - `feat_ecg/feat_ppg:[B,cond_channels,T]`
+        - `q_map_ecg/q_map_ppg:[B,1,T]`
+        - `c_ecg/c_ppg:[B,cond_channels,T]`
+        - `c_joint:[B,joint_channels]`
+        """
         cond_ecg, cond_ppg = self._mask_signal_pair(cond_ecg, cond_ppg, modality_mask)
         feat_ecg = self.ecg_encoder(cond_ecg)
         feat_ppg = self.ppg_encoder(cond_ppg)
@@ -150,6 +162,19 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         cond_ecg: Optional[Tensor] = None,
         cond_ppg: Optional[Tensor] = None,
     ) -> Dict[str, Tensor]:
+        """
+        输入:
+        - `x_t_ecg/x_t_ppg:[B,1,T]`
+        - `t:[B]`
+        - `modality_mask:[B,2]`
+        - `cond_ecg/cond_ppg:[B,1,T]`，为空时默认使用对应 `x_t`
+        输出:
+        - `pred_noise_ecg/pred_noise_ppg:[B,1,T]`
+        - `x0_hat_ecg/x0_hat_ppg:[B,1,T]`
+        - `q_map_ecg/q_map_ppg:[B,1,T]`
+        - `c_ecg/c_ppg:[B,cond_channels,T]`
+        - `c_joint:[B,joint_channels]`
+        """
         x_t_ecg = self._ensure_3d(x_t_ecg, "x_t_ecg")
         x_t_ppg = self._ensure_3d(x_t_ppg, "x_t_ppg")
         cond_ecg = x_t_ecg if cond_ecg is None else self._ensure_3d(cond_ecg, "cond_ecg")
@@ -186,6 +211,7 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         }
 
     def forward(self, noisy_ecg: Tensor, noisy_ppg: Tensor, t: Tensor, modality_mask: Tensor) -> Dict[str, Tensor]:
+        """前向预测入口，输入 `noisy_ecg/noisy_ppg:[B,1,T]`，返回预测噪声及条件中间量。"""
         return self.predict_noise_from_xt(
             x_t_ecg=noisy_ecg,
             x_t_ppg=noisy_ppg,
@@ -195,58 +221,6 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
             cond_ppg=noisy_ppg,
         )
 
-    def compute_losses(
-        self,
-        clean_ecg: Tensor,
-        clean_ppg: Tensor,
-        noisy_ecg: Tensor,
-        noisy_ppg: Tensor,
-        modality_mask: Tensor,
-    ) -> Dict[str, Tensor]:
-        clean_ecg = self._ensure_3d(clean_ecg, "clean_ecg")
-        clean_ppg = self._ensure_3d(clean_ppg, "clean_ppg")
-        noisy_ecg = self._ensure_3d(noisy_ecg, "noisy_ecg")
-        noisy_ppg = self._ensure_3d(noisy_ppg, "noisy_ppg")
-
-        batch_size = clean_ecg.shape[0]
-        device = clean_ecg.device
-        t = self.diffusion.sample_timesteps(batch_size=batch_size, device=device)
-        noise_ecg = torch.randn_like(clean_ecg)
-        noise_ppg = torch.randn_like(clean_ppg)
-        x_t_ecg = self.diffusion.q_sample(clean_ecg, t, noise_ecg)
-        x_t_ppg = self.diffusion.q_sample(clean_ppg, t, noise_ppg)
-
-        outputs = self.predict_noise_from_xt(
-            x_t_ecg=x_t_ecg,
-            x_t_ppg=x_t_ppg,
-            t=t,
-            modality_mask=modality_mask,
-            cond_ecg=noisy_ecg,
-            cond_ppg=noisy_ppg,
-        )
-
-        ecg_mask = modality_mask[:, 0]
-        ppg_mask = modality_mask[:, 1]
-        diff_loss_ecg = masked_mse(outputs["pred_noise_ecg"], noise_ecg, ecg_mask)
-        diff_loss_ppg = masked_mse(outputs["pred_noise_ppg"], noise_ppg, ppg_mask)
-        diffusion_loss = 0.5 * (diff_loss_ecg + diff_loss_ppg)
-
-        der_loss_ecg = masked_derivative_l1(outputs["x0_hat_ecg"], clean_ecg, ecg_mask)
-        der_loss_ppg = masked_derivative_l1(outputs["x0_hat_ppg"], clean_ppg, ppg_mask)
-        derivative_loss = 0.5 * (der_loss_ecg + der_loss_ppg)
-
-        total_loss = (
-            self.loss_cfg.diffusion_weight * diffusion_loss
-            + self.loss_cfg.derivative_weight * derivative_loss
-        )
-
-        return {
-            "total_loss": total_loss,
-            "diffusion_loss": diffusion_loss,
-            "derivative_loss": derivative_loss,
-            **outputs,
-        }
-
     @torch.no_grad()
     def denoise_signal(
         self,
@@ -255,6 +229,13 @@ class ModalityFlexibleConditionalDiffusion(nn.Module):
         num_steps: Optional[int] = None,
         use_ddim: bool = False,
     ) -> Dict[str, Tensor]:
+        """
+        输入:
+        - `y_ecg/y_ppg:[B,1,T]` 或 `[B,T]`
+        输出:
+        - `denoised_ecg/denoised_ppg:[B,1,T]`
+        - `modality_mask:[B,2]`
+        """
         if y_ecg is None and y_ppg is None:
             raise ValueError("y_ecg 和 y_ppg 不能同时为空")
 

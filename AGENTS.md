@@ -14,6 +14,7 @@
 ## 3) 当前目录职责与功能说明
 - 推荐逐步落地并按职责拆分，同时如果有增加文件，请详细在本部分增加对应文件的功能说明和文件夹的职能。
 - `tests/`：基础测试，所有的pytest有关的测试脚本，或者以test_开头的文件都存在这里。
+- `data/`：项目级数据脚本与数据查看工具目录，可放置独立运行的数据检查脚本。
 - `model/`：外部参考代码、数据与权重（默认只读使用）。
 - `requirements.in` / `requirements-dev.in`：依赖输入清单（建议用 pip-tools 锁定）。
 - `pyproject.toml`：项目元信息与 pytest 配置。
@@ -23,6 +24,7 @@
   - `data/`：数据集、采样器、dataloader。
   - `Data_Preparation/`：QT数据集的预处理脚本（QTDB/NSTDB），不准修改。
   - `models/`：模型结构与组件。
+  - `fix_model/`：重构后的 fix 版模型结构目录，当前训练/推理/评估重构链路只允许依赖这里的模型文件。
   - `losses/`：损失函数。
   - `trainers/`：模型训练流程与调度。
   - `metrics/`：计算评价指标的函数和类的存储目录。
@@ -30,6 +32,9 @@
 - `train.py`：模型训练入口，用于命令行开始训练
 - `infer.py`：模型推理入口，用于噪声去噪推理
 - `evaluate.py`：模型评估入口，用于预训练模型评估
+- `train_fix.py`：fix 版模型训练入口，仅使用 `src/fix_model/` 与 `src/config/base.yaml`
+- `infer_fix.py`：fix 版模型推理入口，仅使用 `src/fix_model/` 与 `src/config/base.yaml`
+- `evaluate_fix.py`：fix 版模型评估入口，仅使用 `src/fix_model/` 与 `src/config/base.yaml`
 
 ## 5) 环境与依赖管理
 - Python 版本：`>=3.10`。
@@ -121,10 +126,28 @@
 - `src/ecg_ppg_denoise/models/unified_diffusion_model.py`：统一模型 `ModalityFlexibleConditionalDiffusion`，仅负责 forward、条件噪声预测与 `denoise_signal` 采样。
 - src/ecg_ppg_denoise/losses/masked_losses.py：支持 modality_mask 的 MSE/L1/导数损失。
 - src/ecg_ppg_denoise/losses/diffusion_losses.py：统一扩散训练损失计算器，负责随机时间步采样、q_sample、四类损失聚合与 teacher prior。
+- `src/losses/diffusion_losses.py`：当前主工程使用的扩散损失模块 `UnifiedDiffusionLoss`，负责时间步采样、前向加噪、噪声监督与导数损失聚合。
 - `src/ecg_ppg_denoise/trainers/runner.py`：训练引擎、阶段 mask 采样、smoke 运行器 `ExperimentRunner`。
 - `src/ecg_ppg_denoise/utils/common.py`：随机种子、设备解析、配置快照、checkpoint IO。
 - `src/ecg_ppg_denoise/utils/logging.py`：结构化日志构建。
+- `src/config/base.yaml`：fix 版模型与训练入口统一使用的基础 YAML 配置，顶层包含 `runtime/data/path/loss/model/train`。
+- `src/config/fix_loader.py`：fix 版配置加载与基础校验入口，返回嵌套 dict。
+- `src/fix_model/single_encoder.py`：fix 版 ECG/PPG 单模态编码器，采用 UniCardio 风格多分支卷积结构，并支持缺失模态直接输出零特征。
+- `src/fix_model/conditional_model.py`：fix 版底层噪声预测网络 `ConditionalNoiseModel1D`，同时包含时间嵌入、FiLM 残差块、上下采样和共享 U-Net 主干 `SharedConditionalUNet1D`，负责条件编码、联合上下文构建和噪声预测。
+- `src/fix_model/diffusion.py`：fix 版扩散调度器 `Diffusion1D`，负责 q_sample、predict_x0_from_eps、p_sample 与 DDIM 预留接口。
+- `src/fix_model/main_model.py`：fix 版主模型接口 `DDPM`，负责训练/推理分发、缺失模态处理、噪声预测调用与反向采样。
+- `src/losses/diffusion_losses_fix.py`：fix 版训练损失，负责随机时间步采样、前向加噪、噪声监督和导数损失聚合。
+- `src/trainers/runner_fix.py`：fix 版训练引擎、阶段 mask 采样和 smoke 运行器 `ExperimentRunnerFix`。
+- `src/utils/fix_runtime.py`：fix 版入口共享运行时工具，提供随机种子、设备解析、配置快照、checkpoint IO 和演示信号生成。
+- `tests/test_multimodal_diffusion_smoke_fix.py`：fix 版主模型前向输出、单步训练链路和缺失模态推理的 smoke 测试。
+- `tests/test_smoke_pipeline_fix.py`：fix 版最小训练链路 smoke 测试，验证 `ExperimentRunnerFix` 可直接执行。
 - `tests/test_multimodal_diffusion_smoke.py`：三模态 forward 与单步训练 smoke 测试。
+- `data/inspect_pickle.py`：pickle 查看脚本，默认读取 `D:\Code\data\PPG_FieldStudy\S1\S1.pkl` 并输出内容，兼容旧 pickle 编码回退。
+- `data/resample.py`：PPG/ECG 重采样工具，提供 `ppg_resample` 与 `ecg_resample` 两个对外函数，显式接收 `source_hz` 和 `target_hz`，内部使用 `soxr` 开源库进行高质量重采样。
+- `data/visualize_signal.py`：信号网页可视化脚本，读取 `S*.pkl` 中的 ECG 与 PPG/BVP 信号，生成带概览图和按 chunk 动态加载明细图的静态网页查看器。
+- `tests/test_inspect_pickle_script.py`：验证 pickle 查看脚本对默认读取和 `latin1` 编码回退都可用。
+- `tests/test_resample.py`：验证 PPG 上采样与 ECG 下采样后的长度和波形基本正确。
+- `tests/test_visualize_signal.py`：验证网页波形查看器能够生成网页与 chunk 资源，并正常读取 pickle。
 - `README.md`：项目说明、环境矩阵、训练/推理/测试命令、数据接口说明。
 - `requirements.in`：运行依赖输入清单。
 - `requirements-dev.in`：开发依赖输入清单。

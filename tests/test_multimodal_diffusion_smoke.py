@@ -4,20 +4,23 @@ import pytest
 import torch
 
 from ecg_ppg_denoise.config import load_experiment_config
+from losses import UnifiedDiffusionLoss
 from ecg_ppg_denoise.models import ModalityFlexibleConditionalDiffusion
 
 
-def _build_small_components() -> ModalityFlexibleConditionalDiffusion:
+def _build_small_components() -> tuple[ModalityFlexibleConditionalDiffusion, UnifiedDiffusionLoss]:
     cfg = load_experiment_config(model_name="modality_flexible_conditional_diffusion_debug", stage="joint")
     cfg.model.signal_length = 128
     cfg.model.diffusion_steps = 20
     cfg.data.window_length = 128
     cfg.validate()
-    return ModalityFlexibleConditionalDiffusion(cfg.model, cfg.loss)
+    model = ModalityFlexibleConditionalDiffusion(cfg.model)
+    loss_fn = UnifiedDiffusionLoss(cfg.loss)
+    return model, loss_fn
 
 
 def test_forward_supports_three_modality_modes() -> None:
-    model = _build_small_components()
+    model, _ = _build_small_components()
     batch_size, length = 2, 128
     noisy_ecg = torch.randn(batch_size, 1, length)
     noisy_ppg = torch.randn(batch_size, 1, length)
@@ -45,7 +48,7 @@ def test_forward_supports_three_modality_modes() -> None:
 
 
 def test_local_context_uses_encoder_features_directly() -> None:
-    model = _build_small_components()
+    model, _ = _build_small_components()
     batch_size, length = 2, 128
     cond_ecg = torch.randn(batch_size, 1, length)
     cond_ppg = torch.randn(batch_size, 1, length)
@@ -58,7 +61,7 @@ def test_local_context_uses_encoder_features_directly() -> None:
 
 
 def test_one_training_step_runs() -> None:
-    model = _build_small_components()
+    model, loss_fn = _build_small_components()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     batch_size, length = 2, 128
@@ -68,7 +71,8 @@ def test_one_training_step_runs() -> None:
     noisy_ppg = clean_ppg + 0.1 * torch.randn_like(clean_ppg)
     mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
 
-    out = model.compute_losses(
+    out = loss_fn(
+        model=model,
         clean_ecg=clean_ecg,
         clean_ppg=clean_ppg,
         noisy_ecg=noisy_ecg,
@@ -83,7 +87,7 @@ def test_one_training_step_runs() -> None:
 
 
 def test_missing_modality_is_masked_before_backbone() -> None:
-    model = _build_small_components()
+    model, _ = _build_small_components()
     captured: dict[str, torch.Tensor] = {}
 
     def _capture_stem_input(module: torch.nn.Module, inputs: tuple[torch.Tensor, ...], output: torch.Tensor) -> None:
@@ -116,7 +120,7 @@ def test_missing_modality_is_masked_before_backbone() -> None:
 
 
 def test_default_loss_reduces_to_diffusion_objective() -> None:
-    model = _build_small_components()
+    model, loss_fn = _build_small_components()
     batch_size, length = 2, 128
     clean_ecg = torch.randn(batch_size, 1, length)
     clean_ppg = torch.randn(batch_size, 1, length)
@@ -124,7 +128,8 @@ def test_default_loss_reduces_to_diffusion_objective() -> None:
     noisy_ppg = clean_ppg + 0.1 * torch.randn_like(clean_ppg)
     mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
 
-    out = model.compute_losses(
+    out = loss_fn(
+        model=model,
         clean_ecg=clean_ecg,
         clean_ppg=clean_ppg,
         noisy_ecg=noisy_ecg,
@@ -137,7 +142,7 @@ def test_default_loss_reduces_to_diffusion_objective() -> None:
 
 
 def test_denoise_signal_accepts_batched_2d_input() -> None:
-    model = _build_small_components()
+    model, _ = _build_small_components()
     batch_size, length = 2, 128
     noisy_ecg = torch.randn(batch_size, length)
 
@@ -148,7 +153,7 @@ def test_denoise_signal_accepts_batched_2d_input() -> None:
 
 
 def test_denoise_signal_requires_matching_modal_shapes() -> None:
-    model = _build_small_components()
+    model, _ = _build_small_components()
     noisy_ecg = torch.randn(2, 1, 128)
     noisy_ppg = torch.randn(2, 1, 64)
 

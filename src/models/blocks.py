@@ -30,6 +30,7 @@ class ConvNormGELU(nn.Module):
         self.act = nn.GELU()
 
     def forward(self, x: Tensor) -> Tensor:
+        """输入 `x:[B,C_in,T]`，输出 `[B,C_out,T]`。"""
         return self.act(self.norm(self.conv(x)))
 
 
@@ -39,6 +40,7 @@ class SinusoidalTimeEmbedding(nn.Module):
         self.dim = dim
 
     def forward(self, t: Tensor) -> Tensor:
+        """输入时间步 `t:[B]`，输出时间嵌入 `[B,dim]`。"""
         half = self.dim // 2
         device = t.device
         scale = math.log(10000) / max(half - 1, 1)
@@ -62,6 +64,7 @@ class FiLMResBlock1D(nn.Module):
         self.skip = nn.Conv1d(in_channels, out_channels, kernel_size=1) if in_channels != out_channels else nn.Identity()
 
     def forward(self, x: Tensor, cond: Tensor) -> Tensor:
+        """输入 `x:[B,C_in,T]`、`cond:[B,D]`，输出 `[B,C_out,T]`。"""
         scale, shift = self.cond_proj(cond).chunk(2, dim=-1)
         scale = scale.unsqueeze(-1)
         shift = shift.unsqueeze(-1)
@@ -80,6 +83,7 @@ class Downsample1D(nn.Module):
         self.conv = nn.Conv1d(channels, channels, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x: Tensor) -> Tensor:
+        """输入 `x:[B,C,T]`，输出 `[B,C,T/2]`。"""
         return self.conv(x)
 
 
@@ -89,6 +93,7 @@ class Upsample1D(nn.Module):
         self.conv = nn.ConvTranspose1d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
 
     def forward(self, x: Tensor) -> Tensor:
+        """输入 `x:[B,C_in,T]`，输出 `[B,C_out,2T]`。"""
         return self.conv(x)
 
 
@@ -146,6 +151,16 @@ class UnifiedNoisePredictor1D(nn.Module):
         c_ppg: Tensor,
         modality_mask: Tensor,
     ) -> Tensor:
+        """
+        输入:
+        - `x_t_pair:[B,2,T]`
+        - `t:[B]`
+        - `c_joint:[B,joint_channels]`
+        - `c_ecg/c_ppg:[B,cond_channels,T_cond]`
+        - `modality_mask:[B,2]`
+        输出:
+        - 预测噪声 `pred_eps_pair:[B,2,T]`
+        """
         batch_size, _, length = x_t_pair.shape
         c_ecg_up = F.interpolate(c_ecg, size=length, mode="linear", align_corners=False)
         c_ppg_up = F.interpolate(c_ppg, size=length, mode="linear", align_corners=False)

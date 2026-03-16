@@ -15,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
 
 from ecg_ppg_denoise.config import ExperimentConfig, load_experiment_config
 from ecg_ppg_denoise.data import build_train_val_datasets
+from losses import UnifiedDiffusionLoss
 from ecg_ppg_denoise.models import ModalityFlexibleConditionalDiffusion
 from ecg_ppg_denoise.trainers import TrainEngine
 from ecg_ppg_denoise.utils import (
@@ -47,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--data-path", type=str, default=None)
+    parser.add_argument("--dataset-path", type=str, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
@@ -126,7 +127,8 @@ def main() -> int:
         pin_memory=(device.type == "cuda"),
     )
 
-    model = ModalityFlexibleConditionalDiffusion(cfg.model, cfg.loss).to(device)
+    model = ModalityFlexibleConditionalDiffusion(cfg.model).to(device)
+    loss_fn = UnifiedDiffusionLoss(cfg.loss).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.train.lr, weight_decay=cfg.train.weight_decay)
     scaler = build_grad_scaler(enabled=cfg.runtime.use_amp and device.type == "cuda")
 
@@ -140,6 +142,7 @@ def main() -> int:
 
     engine = TrainEngine(
         model=model,
+        loss_fn=loss_fn,
         optimizer=optimizer,
         scaler=scaler,
         device=device,

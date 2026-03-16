@@ -68,7 +68,7 @@ def main() -> int:
 
     logger = build_logger("infer")
     device = resolve_device(cfg.runtime.device)
-    model = ModalityFlexibleConditionalDiffusion(cfg.model, cfg.loss).to(device)
+    model = ModalityFlexibleConditionalDiffusion(cfg.model).to(device)
     model.eval()
 
     checkpoint_path = args.checkpoint or cfg.path.checkpoint_path
