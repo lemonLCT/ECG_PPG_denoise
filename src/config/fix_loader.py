@@ -107,7 +107,6 @@ def _validate_fix_config(payload: dict[str, Any]) -> None:
     if not isinstance(weight_decay, (int, float)) or float(weight_decay) < 0.0:
         raise ValueError("`train.weight_decay` 必须是非负数")
     _require_positive_float(train_cfg.get("grad_clip", 0.0), "train.grad_clip")
-    _require_positive_int(int(train_cfg.get("log_interval", 0)), "train.log_interval")
     _require_positive_int(int(train_cfg.get("save_every_epochs", 0)), "train.save_every_epochs")
     _require_positive_int(int(train_cfg.get("max_steps_per_epoch", 0)), "train.max_steps_per_epoch")
     modality_dropout = train_cfg.get("modality_dropout", 0.0)

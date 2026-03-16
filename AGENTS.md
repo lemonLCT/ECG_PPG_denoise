@@ -118,6 +118,7 @@
 - `src/ecg_ppg_denoise/config/loader.py`：统一配置加载入口。
 - `src/ecg_ppg_denoise/config/schema.py`：配置 schema 兼容导出（供测试与旧调用路径）。
 - `src/ecg_ppg_denoise/data/multimodal_dataset.py`：`.npz/.pt/.npy` 通用数据集、滑窗切分、train/val 划分、合成数据回退。
+- `src/dataset/QTdataset.py`：fix 链路使用的 QT 专用数据集入口，负责调用 Data_Preparation、整理 ECG-only 训练/验证数组，并适配为当前多模态训练接口。
 - `src/ecg_ppg_denoise/models/diffusion_schedule.py`：DDPM 1D 调度（线性 beta、q_sample、predict_x0_from_eps、p_sample）与 DDIM 预留接口。
 - `src/ecg_ppg_denoise/models/blocks.py`：基础网络块与共享主干 `UnifiedNoisePredictor1D`（1D U-Net + FiLM/AdaGN）。
 - `src/ecg_ppg_denoise/models/encoders.py`：ECG/PPG 条件编码器，当前采用 UniCardio 风格的多卷积核并行 `singleEncoder` 结构。

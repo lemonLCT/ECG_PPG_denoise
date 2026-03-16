@@ -15,7 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from config import load_fix_config
-from dataset import build_train_val_datasets
+from dataset import build_qt_train_val_datasets, build_train_val_datasets
 from fix_model import DDPM
 from trainers import TrainEngineFix
 from utils.fix_runtime import (
@@ -119,12 +119,15 @@ def main() -> int:
     logger.info("输出目录: %s", output_dir)
 
     data_cfg = build_data_namespace(cfg)
-    train_ds, val_ds = build_train_val_datasets(
-        data_cfg,
-        seed=int(cfg["runtime"]["seed"]),
-        use_qt_dataset=args.use_qt_dataset,
-        qt_noise_version=args.qt_noise_version,
-    )
+    if args.use_qt_dataset:
+        train_ds, val_ds = build_qt_train_val_datasets(noise_version=args.qt_noise_version)
+    else:
+        train_ds, val_ds = build_train_val_datasets(
+            data_cfg,
+            seed=int(cfg["runtime"]["seed"]),
+            use_qt_dataset=False,
+            qt_noise_version=args.qt_noise_version,
+        )
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg["train"]["batch_size"]),
@@ -175,7 +178,6 @@ def main() -> int:
         train_metrics = engine.train_one_epoch(
             dataloader=train_loader,
             max_steps=max_steps_per_epoch,
-            log_interval=int(cfg["train"]["log_interval"]),
             logger=logger,
         )
         val_metrics = engine.validate_one_epoch(

@@ -65,9 +65,7 @@ logs/
 data/
 tests/
 # 默认忽略源码包下的本地数据集，仅放行 Python 源文件和占位文件
-src/dataset/**
-!src/dataset/
-!src/dataset/**/
+
 !src/ecg_ppg_denoise/data/*.py
 !src/ecg_ppg_denoise/data/**/*.py
 !src/dataset/.gitkeep
