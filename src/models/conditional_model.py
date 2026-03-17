@@ -235,12 +235,6 @@ class ConditionalNoiseModel1D(nn.Module):
             raise ValueError("每个样本至少需要一个可用模态")
         return mask_tensor
 
-    @staticmethod
-    def _mask_signal_pair(ecg: Tensor, ppg: Tensor, modality_mask: Tensor) -> tuple[Tensor, Tensor]:
-        ecg_mask = modality_mask[:, 0].view(-1, 1, 1)
-        ppg_mask = modality_mask[:, 1].view(-1, 1, 1)
-        return ecg * ecg_mask, ppg * ppg_mask
-
     def _encode_conditions(self, cond_ecg: Tensor, cond_ppg: Tensor, modality_mask: Tensor) -> Dict[str, Tensor]:
         """
         输入:
@@ -251,7 +245,6 @@ class ConditionalNoiseModel1D(nn.Module):
         - `c_ecg/c_ppg:[B,C,T]`
         - `c_joint:[B,joint_channels]`
         """
-        cond_ecg, cond_ppg = self._mask_signal_pair(cond_ecg, cond_ppg, modality_mask)
         feat_ecg = self.ecg_encoder(cond_ecg, modality_mask[:, 0])
         feat_ppg = self.ppg_encoder(cond_ppg, modality_mask[:, 1])
 
@@ -299,7 +292,6 @@ class ConditionalNoiseModel1D(nn.Module):
             raise ValueError(f"t 期望 [B]，实际为 {tuple(t.shape)}")
 
         modality_mask = self._normalize_mask(modality_mask, x_t_ecg.shape[0], x_t_ecg.device, x_t_ecg.dtype)
-        x_t_ecg, x_t_ppg = self._mask_signal_pair(x_t_ecg, x_t_ppg, modality_mask)
         enc = self._encode_conditions(cond_ecg, cond_ppg, modality_mask)
 
         x_t_pair = torch.cat([x_t_ecg, x_t_ppg], dim=1)

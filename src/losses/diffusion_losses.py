@@ -60,7 +60,7 @@ class DiffusionLoss(nn.Module):
         )
 
         clean_ecg, clean_ppg = model._mask_signal_pair(clean_ecg, clean_ppg, modality_mask)
-        noisy_ecg, noisy_ppg = model._mask_signal_pair(noisy_ecg, noisy_ppg, modality_mask)
+        noisy_ecg, noisy_ppg = model._fill_missing_noisy_pair(noisy_ecg, noisy_ppg, modality_mask)
 
         batch_size = clean_ecg.shape[0]
         device = clean_ecg.device
@@ -68,10 +68,8 @@ class DiffusionLoss(nn.Module):
 
         noise_ecg = torch.randn_like(clean_ecg)
         noise_ppg = torch.randn_like(clean_ppg)
-        noise_ecg, noise_ppg = model._mask_signal_pair(noise_ecg, noise_ppg, modality_mask)
         x_t_ecg = model.diffusion.q_sample(clean_ecg, t, noise_ecg)
         x_t_ppg = model.diffusion.q_sample(clean_ppg, t, noise_ppg)
-        x_t_ecg, x_t_ppg = model._mask_signal_pair(x_t_ecg, x_t_ppg, modality_mask)
 
         outputs = model.predict_noise_from_xt(
             x_t_ecg=x_t_ecg,

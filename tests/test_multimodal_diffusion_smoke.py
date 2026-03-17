@@ -82,6 +82,29 @@ def test_one_training_step_runs() -> None:
     optimizer.step()
 
 
+def test_missing_modality_uses_gaussian_placeholder_for_noisy_path() -> None:
+    cfg = _build_small_config()
+    model = DDPM(base_model=None, config=cfg, device="cpu")
+    batch_size, length = 2, 64
+    clean_ecg = torch.randn(batch_size, 1, length)
+    clean_ppg = torch.randn(batch_size, 1, length)
+    noisy_ecg = clean_ecg + 0.1 * torch.randn_like(clean_ecg)
+    noisy_ppg = clean_ppg + 0.1 * torch.randn_like(clean_ppg)
+    mask = torch.tensor([[1.0, 1.0], [1.0, 0.0]])
+
+    out = model(
+        noisy_ecg=noisy_ecg,
+        noisy_ppg=noisy_ppg,
+        clean_ecg=clean_ecg,
+        clean_ppg=clean_ppg,
+        modality_mask=mask,
+        train_gen_flag=0,
+    )
+
+    missing_ppg_xt = out["x_t_ppg"][1]
+    assert not torch.allclose(missing_ppg_xt, torch.zeros_like(missing_ppg_xt))
+
+
 def test_generate_masks_missing_modality_output() -> None:
     cfg = _build_small_config()
     model = DDPM(base_model=None, config=cfg, device="cpu")

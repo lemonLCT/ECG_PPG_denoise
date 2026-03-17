@@ -73,6 +73,15 @@ class DDPM(nn.Module):
         ppg_mask = modality_mask[:, 1].view(-1, 1, 1)
         return ecg * ecg_mask, ppg * ppg_mask
 
+    @staticmethod
+    def _fill_missing_noisy_pair(ecg: Tensor, ppg: Tensor, modality_mask: Tensor) -> tuple[Tensor, Tensor]:
+        """将缺失模态的 noisy/noised 信号替换为同形状高斯噪声。"""
+        ecg_mask = modality_mask[:, 0].view(-1, 1, 1)
+        ppg_mask = modality_mask[:, 1].view(-1, 1, 1)
+        noisy_ecg = ecg * ecg_mask + torch.randn_like(ecg) * (1.0 - ecg_mask)
+        noisy_ppg = ppg * ppg_mask + torch.randn_like(ppg) * (1.0 - ppg_mask)
+        return noisy_ecg, noisy_ppg
+
     def predict_noise_from_xt(
         self,
         x_t_ecg: Tensor,
@@ -90,8 +99,6 @@ class DDPM(nn.Module):
             raise ValueError("ECG/PPG 输入形状必须一致")
 
         modality_mask = self.normalize_modality_mask(modality_mask, x_t_ecg.shape[0], x_t_ecg.device, x_t_ecg.dtype)
-        x_t_ecg, x_t_ppg = self._mask_signal_pair(x_t_ecg, x_t_ppg, modality_mask)
-        cond_ecg, cond_ppg = self._mask_signal_pair(cond_ecg, cond_ppg, modality_mask)
         return self.base_model(
             x_t_ecg=x_t_ecg,
             x_t_ppg=x_t_ppg,
@@ -125,8 +132,6 @@ class DDPM(nn.Module):
         noisy_ppg: Tensor,
         modality_mask: Tensor,
     ) -> Dict[str, Tensor]:
-        clean_ecg, clean_ppg = self._mask_signal_pair(clean_ecg, clean_ppg, modality_mask)
-        noisy_ecg, noisy_ppg = self._mask_signal_pair(noisy_ecg, noisy_ppg, modality_mask)
         return self.loss_fn(self, clean_ecg, clean_ppg, noisy_ecg, noisy_ppg, modality_mask)
 
     def two_modal_train(
@@ -167,6 +172,7 @@ class DDPM(nn.Module):
         num_steps: Optional[int],
         use_ddim: bool,
     ) -> Dict[str, Tensor]:
+        noisy_ecg, noisy_ppg = self._fill_missing_noisy_pair(noisy_ecg, noisy_ppg, modality_mask)
         batch_size, _, length = noisy_ecg.shape
         device = noisy_ecg.device
         x_t_pair = torch.randn(batch_size, 2, length, device=device, dtype=noisy_ecg.dtype)
@@ -215,7 +221,6 @@ class DDPM(nn.Module):
         num_steps: Optional[int],
         use_ddim: bool,
     ) -> Dict[str, Tensor]:
-        noisy_ecg, noisy_ppg = self._mask_signal_pair(noisy_ecg, noisy_ppg, modality_mask)
         return self._run_reverse_process(noisy_ecg, noisy_ppg, modality_mask, num_steps, use_ddim)
 
     def two_modal_generate(
