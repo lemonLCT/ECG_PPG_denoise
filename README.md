@@ -145,27 +145,33 @@ python evaluate.py --config src/config/base.yaml --checkpoint artifacts/runs/def
 
 ## 数据脚本
 
-`data/ppg_noise_generate.py` 已用纯 Python 复现 `gen_PPG_artifacts.m` 的核心生成逻辑，不再依赖 MATLAB 或 Octave。脚本会生成 PPG 伪影，并同时导出 CSV、SVG 波形图和 JSON 元数据：
+`data/ppg_noise_generate.py` 已用纯 Python 复现 `gen_PPG_artifacts.m` 的核心生成逻辑，不再依赖 MATLAB 或 Octave。脚本默认读取 `D:\Code\data\数据处理脚本\artifact_param.mat` 中的作者原始统计参数，生成 PPG 伪影，并同时导出 CSV、SVG 波形图和 JSON 元数据：
 
 ```bash
-python data/ppg_noise_generate.py --duration-samples 4096 --sampling-rate-hz 64 --preset demo
+python data/ppg_noise_generate.py --duration-samples 4096 --sampling-rate-hz 64 --seed 42 --save-states
 ```
 
-如果要显式指定原函数的全部参数，可以这样调用：
+如果要显式指定原函数的全部参数或覆盖 `artifact_param.mat`，可以这样调用：
 
 ```bash
 python data/ppg_noise_generate.py \
   --duration-samples 4096 \
   --sampling-rate-hz 64 \
-  --prob 0.25 0.25 0.25 0.25 \
+  --artifact-types 1 1 1 1 \
   --dur-mu 12 4 4 4 4 \
-  --rms-shape 2 2 2 2 \
-  --rms-scale 0.35 0.45 0.55 0.75 \
-  --slope -6 -8 -10 -12
+  --rms-shape 0.88 1.44 1.40 2.01 \
+  --rms-scale 23.01 3.19 2.20 0.80 \
+  --slope-mean -32.34 -29.39 -25.45 -18.12 \
+  --slope-std 6.03 5.71 4.13 4.10 \
+  --seed 42
 ```
 
 常用参数说明：
 - `--seed <int>`：固定随机种子，便于复现实验
+- `--artifact-param <path>`：切换到其他 `artifact_param.mat` 文件
+- `--artifact-types 0/1 0/1 0/1 0/1`：控制启用哪几类伪影；若未显式给 `--prob`，脚本会在启用项间自动均分概率
+- `--slope-mean` / `--slope-std`：控制每次运行时 4 类伪影频谱斜率的随机采样分布
+- `--slope`：直接锁定本次运行的 4 个斜率，不再随机采样
 - `--output-dir <path>` 与 `--output-stem <name>`：控制输出目录和文件名前缀
 - `--save-states`：额外导出状态序列，0 表示无伪影，1-4 表示 4 类伪影
 

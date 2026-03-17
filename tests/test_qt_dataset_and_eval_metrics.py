@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from evaluate import compute_ecg_metrics
+from evaluate import build_noise_segment_summary, compute_ecg_metric_arrays, compute_ecg_metrics, summarize_metric_arrays
 
 
 def test_unpack_qt_return_and_dataset_shapes() -> None:
@@ -52,6 +52,37 @@ def test_compute_ecg_metrics_has_expected_keys() -> None:
     assert set(metrics.keys()) == expected
     for value in metrics.values():
         assert np.isfinite(value) or np.isnan(value)
+
+
+def test_metric_summary_contains_mean_and_std() -> None:
+    n, t = 6, 128
+    clean = np.random.randn(n, 1, t).astype(np.float32)
+    noisy = clean + 0.15 * np.random.randn(n, 1, t).astype(np.float32)
+    denoised = clean + 0.03 * np.random.randn(n, 1, t).astype(np.float32)
+
+    metric_arrays = compute_ecg_metric_arrays(clean_ecg=clean, noisy_ecg=noisy, denoised_ecg=denoised)
+    summary = summarize_metric_arrays(metric_arrays)
+
+    assert set(summary.keys()) == {"SSD", "MAD", "PRD", "COS_SIM", "SNR_in", "SNR_out", "SNR_improvement"}
+    for stats in summary.values():
+        assert set(stats.keys()) == {"mean", "std"}
+        assert np.isfinite(stats["mean"]) or np.isnan(stats["mean"])
+        assert np.isfinite(stats["std"]) or np.isnan(stats["std"])
+
+
+def test_build_noise_segment_summary_groups_by_noise_level() -> None:
+    metric_arrays = {
+        "SSD": np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+        "MAD": np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float64),
+    }
+    noise_levels = np.array([0.3, 0.7, 1.2, 1.8], dtype=np.float64)
+
+    summary = build_noise_segment_summary(metric_arrays, noise_levels, segments=(0.2, 0.6, 1.0, 2.0))
+
+    assert set(summary.keys()) == {"0.2<noise<=0.6", "0.6<noise<=1.0", "1.0<noise<=2.0"}
+    assert summary["0.2<noise<=0.6"]["SSD"]["mean"] == 1.0
+    assert summary["0.6<noise<=1.0"]["MAD"]["mean"] == 0.2
+    assert summary["1.0<noise<=2.0"]["SSD"]["mean"] == 3.5
 
 
 def test_split_qt_train_val_arrays_uses_train_only_and_keeps_7_3_ratio() -> None:
