@@ -139,11 +139,10 @@ def main() -> int:
             y_ecg, y_ppg, modality_mask = _select_inputs(args.mode, ecg_batch, ppg_batch)
 
             with torch.no_grad():
-                result = model(
+                result = model.generate(
                     noisy_ecg=y_ecg,
                     noisy_ppg=y_ppg,
                     modality_mask=modality_mask,
-                    train_gen_flag=1,
                     num_steps=args.num_steps,
                     use_ddim=args.use_ddim,
                 )

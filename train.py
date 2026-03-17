@@ -153,12 +153,23 @@ def main() -> int:
         lr=float(cfg["train"]["lr"]),
         weight_decay=float(cfg["train"]["weight_decay"]),
     )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, int(cfg["train"]["epochs"])),
+    )
     scaler = build_grad_scaler(enabled=bool(cfg["runtime"]["use_amp"]) and device.type == "cuda")
 
     start_epoch = 0
     global_step = 0
     if args.resume:
-        payload = load_checkpoint(args.resume, model=model, optimizer=optimizer, scaler=scaler, map_location=device)
+        payload = load_checkpoint(
+            args.resume,
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            scheduler=scheduler,
+            map_location=device,
+        )
         start_epoch = int(payload.get("epoch", 0)) + 1
         global_step = int(payload.get("global_step", 0))
         logger.info("已恢复训练 epoch=%d global_step=%d", start_epoch, global_step)
@@ -169,7 +180,6 @@ def main() -> int:
         scaler=scaler,
         device=device,
         stage=cfg["train"]["stage_name"],
-        modality_dropout=float(cfg["train"]["modality_dropout"]),
         use_amp=bool(cfg["runtime"]["use_amp"]),
         grad_clip=float(cfg["train"]["grad_clip"]),
     )
@@ -190,6 +200,8 @@ def main() -> int:
             logger=logger,
         )
         global_step += max_steps_per_epoch
+        scheduler.step()
+        logger.info("当前学习率: %.8f", float(optimizer.param_groups[0]["lr"]))
 
         latest_path = ckpt_dir / "latest.pt"
         save_checkpoint(
@@ -197,6 +209,7 @@ def main() -> int:
             model=model,
             optimizer=optimizer,
             scaler=scaler,
+            scheduler=scheduler,
             epoch=epoch,
             global_step=global_step,
             config=cfg,
@@ -209,6 +222,7 @@ def main() -> int:
                 model=model,
                 optimizer=optimizer,
                 scaler=scaler,
+                scheduler=scheduler,
                 epoch=epoch,
                 global_step=global_step,
                 config=cfg,
@@ -222,6 +236,7 @@ def main() -> int:
                 model=model,
                 optimizer=optimizer,
                 scaler=scaler,
+                scheduler=scheduler,
                 epoch=epoch,
                 global_step=global_step,
                 config=cfg,

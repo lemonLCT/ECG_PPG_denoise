@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from models.single_encoder import SingleEncoder1D, _make_group_norm
+from models.single_encoder import _make_group_norm
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -32,9 +32,11 @@ class SinusoidalTimeEmbedding(nn.Module):
 class FiLMResBlock1D(nn.Module):
     """
     带 FiLM 条件注入的 1D 残差块。
+
     输入:
     - `x:[B,C_in,T]`
     - `cond:[B,D]`
+
     输出:
     - `y:[B,C_out,T]`
     """
@@ -90,17 +92,19 @@ class Upsample1D(nn.Module):
 class SharedConditionalUNet1D(nn.Module):
     """
     共享噪声预测 U-Net 主干。
+
     输入:
     - `x_t_pair:[B,2,T]`
     - `t:[B]`
     - `c_joint:[B,joint_channels]`
-    - `c_ecg/c_ppg:[B,cond_channels,T_cond]`
-    - `modality_mask:[B,2]`
+    - `c_ecg/c_ppg:[B,modality_channels,T_cond]`
+    - `modality_mask:[2]` 或内部展开后的 `[B,2]`
+
     输出:
     - `pred_eps_pair:[B,2,T]`
     """
 
-    def __init__(self, cond_channels: int, joint_channels: int, base_channels: int, gn_groups: int) -> None:
+    def __init__(self, modality_channels: int, joint_channels: int, base_channels: int, gn_groups: int) -> None:
         super().__init__()
         cond_dim = base_channels * 4
         self.time_embed = SinusoidalTimeEmbedding(base_channels)
@@ -114,7 +118,7 @@ class SharedConditionalUNet1D(nn.Module):
             nn.GELU(),
             nn.Linear(cond_dim, cond_dim),
         )
-        self.local_proj = nn.Conv1d(cond_channels * 2, base_channels, kernel_size=1)
+        self.local_proj = nn.Conv1d(modality_channels * 2, base_channels, kernel_size=1)
         self.stem = nn.Conv1d(2, base_channels, kernel_size=3, padding=1)
         self.down1 = FiLMResBlock1D(base_channels, base_channels, cond_dim, gn_groups)
         self.downsample1 = Downsample1D(base_channels)
@@ -169,42 +173,47 @@ class SharedConditionalUNet1D(nn.Module):
 
 class ConditionalNoiseModel1D(nn.Module):
     """
-    底层条件噪声预测网络。
+    只负责噪声预测的条件网络。
+
     输入:
     - `x_t_ecg/x_t_ppg:[B,1,T]`
-    - `cond_ecg/cond_ppg:[B,1,T]`
+    - `clean_feat_ecg/clean_feat_ppg:[B,C,T]`
+    - `noisy_feat_ecg/noisy_feat_ppg:[B,C,T]`
     - `t:[B]`
-    - `modality_mask:[B,2]`
+    - `modality_mask:[2]` 或内部展开后的 `[B,2]`
+
     输出:
+    - `pred_noise_pair:[B,2,T]`
     - `pred_noise_ecg/pred_noise_ppg:[B,1,T]`
-    - 以及条件编码相关中间量
+    - `c_ecg/c_ppg:[B,2C,T]`
+    - `c_joint:[B,joint_channels]`
     """
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, feature_channels: int) -> None:
         super().__init__()
         model_cfg = config["model"]
         conditional_cfg = model_cfg["conditional_model"]
 
-        self.ecg_encoder = SingleEncoder1D(model_cfg["ecg_encoder"])
-        self.ppg_encoder = SingleEncoder1D(model_cfg["ppg_encoder"])
-        if self.ecg_encoder.out_channels != self.ppg_encoder.out_channels:
+        configured_channels = int(conditional_cfg.get("cond_channels", feature_channels))
+        if configured_channels != feature_channels:
             raise ValueError(
-                "ECG 和 PPG encoder 的输出通道必须一致，"
-                f"实际为 {self.ecg_encoder.out_channels} 和 {self.ppg_encoder.out_channels}"
+                "conditional_model.cond_channels 必须与 single_encoder 输出通道一致，"
+                f"实际为 {configured_channels} 和 {feature_channels}"
             )
 
-        self.cond_channels = self.ecg_encoder.out_channels
+        self.single_feature_channels = feature_channels
+        self.modality_channels = feature_channels * 2
         self.joint_channels = int(conditional_cfg["joint_channels"])
         self.base_channels = int(conditional_cfg["base_channels"])
         self.gn_groups = int(conditional_cfg["gn_groups"])
 
         self.context_proj = nn.Sequential(
-            nn.Linear(self.cond_channels * 2 + 2, self.joint_channels),
+            nn.Linear(self.modality_channels * 2 + 2, self.joint_channels),
             nn.GELU(),
             nn.Linear(self.joint_channels, self.joint_channels),
         )
         self.noise_backbone = SharedConditionalUNet1D(
-            cond_channels=self.cond_channels,
+            modality_channels=self.modality_channels,
             joint_channels=self.joint_channels,
             base_channels=self.base_channels,
             gn_groups=self.gn_groups,
@@ -215,7 +224,7 @@ class ConditionalNoiseModel1D(nn.Module):
         if x.ndim == 2:
             x = x.unsqueeze(1)
         if x.ndim != 3:
-            raise ValueError(f"{name} 期望 [B,1,T]，实际为 {tuple(x.shape)}")
+            raise ValueError(f"{name} 期望 [B,C,T]，实际为 {tuple(x.shape)}")
         return x
 
     @staticmethod
@@ -235,28 +244,30 @@ class ConditionalNoiseModel1D(nn.Module):
             raise ValueError("每个样本至少需要一个可用模态")
         return mask_tensor
 
-    def _encode_conditions(self, cond_ecg: Tensor, cond_ppg: Tensor, modality_mask: Tensor) -> Dict[str, Tensor]:
+    def _build_conditions(
+        self,
+        clean_feat_ecg: Tensor,
+        clean_feat_ppg: Tensor,
+        noisy_feat_ecg: Tensor,
+        noisy_feat_ppg: Tensor,
+        modality_mask: Tensor,
+    ) -> Dict[str, Tensor]:
         """
         输入:
-        - `cond_ecg/cond_ppg:[B,1,T]`
+        - `clean_feat_*/noisy_feat_*:[B,C,T]`
         - `modality_mask:[B,2]`
+
         输出:
-        - `feat_ecg/feat_ppg:[B,C,T]`
-        - `c_ecg/c_ppg:[B,C,T]`
+        - `c_ecg/c_ppg:[B,2C,T]`
         - `c_joint:[B,joint_channels]`
         """
-        feat_ecg = self.ecg_encoder(cond_ecg, modality_mask[:, 0])
-        feat_ppg = self.ppg_encoder(cond_ppg, modality_mask[:, 1])
-
-        c_ecg = feat_ecg
-        c_ppg = feat_ppg
+        c_ecg = torch.cat([clean_feat_ecg, noisy_feat_ecg], dim=1)
+        c_ppg = torch.cat([clean_feat_ppg, noisy_feat_ppg], dim=1)
         pooled_ecg = c_ecg.mean(dim=-1)
         pooled_ppg = c_ppg.mean(dim=-1)
         joint_input = torch.cat([pooled_ecg, pooled_ppg, modality_mask.float()], dim=1)
         c_joint = self.context_proj(joint_input)
         return {
-            "feat_ecg": feat_ecg,
-            "feat_ppg": feat_ppg,
             "c_ecg": c_ecg,
             "c_ppg": c_ppg,
             "c_joint": c_joint,
@@ -266,46 +277,56 @@ class ConditionalNoiseModel1D(nn.Module):
         self,
         x_t_ecg: Tensor,
         x_t_ppg: Tensor,
-        cond_ecg: Tensor,
-        cond_ppg: Tensor,
+        clean_feat_ecg: Tensor,
+        clean_feat_ppg: Tensor,
+        noisy_feat_ecg: Tensor,
+        noisy_feat_ppg: Tensor,
         t: Tensor,
         modality_mask: Tensor,
     ) -> Dict[str, Tensor]:
         """
         输入:
         - `x_t_ecg/x_t_ppg:[B,1,T]`
-        - `cond_ecg/cond_ppg:[B,1,T]`
+        - `clean_feat_ecg/clean_feat_ppg:[B,C,T]`
+        - `noisy_feat_ecg/noisy_feat_ppg:[B,C,T]`
         - `t:[B]`
-        - `modality_mask:[B,2]`
+        - `modality_mask:[2]` 或内部展开后的 `[B,2]`
+
         输出:
         - `pred_noise_pair:[B,2,T]`
         - `pred_noise_ecg/pred_noise_ppg:[B,1,T]`
-        - `feat_ecg/feat_ppg:[B,C,T]`
-        - `c_ecg/c_ppg:[B,C,T]`
+        - `c_ecg/c_ppg:[B,2C,T]`
         - `c_joint:[B,joint_channels]`
         """
         x_t_ecg = self._ensure_3d(x_t_ecg, "x_t_ecg")
         x_t_ppg = self._ensure_3d(x_t_ppg, "x_t_ppg")
-        cond_ecg = self._ensure_3d(cond_ecg, "cond_ecg")
-        cond_ppg = self._ensure_3d(cond_ppg, "cond_ppg")
+        clean_feat_ecg = self._ensure_3d(clean_feat_ecg, "clean_feat_ecg")
+        clean_feat_ppg = self._ensure_3d(clean_feat_ppg, "clean_feat_ppg")
+        noisy_feat_ecg = self._ensure_3d(noisy_feat_ecg, "noisy_feat_ecg")
+        noisy_feat_ppg = self._ensure_3d(noisy_feat_ppg, "noisy_feat_ppg")
         if t.ndim != 1 or t.shape[0] != x_t_ecg.shape[0]:
             raise ValueError(f"t 期望 [B]，实际为 {tuple(t.shape)}")
 
-        modality_mask = self._normalize_mask(modality_mask, x_t_ecg.shape[0], x_t_ecg.device, x_t_ecg.dtype)
-        enc = self._encode_conditions(cond_ecg, cond_ppg, modality_mask)
+        batch_size = x_t_ecg.shape[0]
+        modality_mask = self._normalize_mask(modality_mask, batch_size, x_t_ecg.device, x_t_ecg.dtype)
+        cond = self._build_conditions(clean_feat_ecg, clean_feat_ppg, noisy_feat_ecg, noisy_feat_ppg, modality_mask)
 
         x_t_pair = torch.cat([x_t_ecg, x_t_ppg], dim=1)
         pred_noise_pair = self.noise_backbone(
             x_t_pair=x_t_pair,
             t=t,
-            c_joint=enc["c_joint"],
-            c_ecg=enc["c_ecg"],
-            c_ppg=enc["c_ppg"],
+            c_joint=cond["c_joint"],
+            c_ecg=cond["c_ecg"],
+            c_ppg=cond["c_ppg"],
             modality_mask=modality_mask,
         )
         return {
             "pred_noise_pair": pred_noise_pair,
             "pred_noise_ecg": pred_noise_pair[:, 0:1, :],
             "pred_noise_ppg": pred_noise_pair[:, 1:2, :],
-            **enc,
+            "clean_feat_ecg": clean_feat_ecg,
+            "clean_feat_ppg": clean_feat_ppg,
+            "noisy_feat_ecg": noisy_feat_ecg,
+            "noisy_feat_ppg": noisy_feat_ppg,
+            **cond,
         }

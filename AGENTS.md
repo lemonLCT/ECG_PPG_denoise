@@ -136,8 +136,10 @@
 - `tests/test_smoke_pipeline.py`：最小训练链路 smoke 测试，验证 `ExperimentRunner` 可直接执行。
 - `data/inspect_pickle.py`：pickle 查看脚本，默认读取 `D:\Code\data\PPG_FieldStudy\S1\S1.pkl` 并输出内容，兼容旧 pickle 编码回退。
 - `data/resample.py`：PPG/ECG 重采样工具，提供 `ppg_resample` 与 `ecg_resample` 两个对外函数，显式接收 `source_hz` 和 `target_hz`，内部使用 `soxr` 开源库进行高质量重采样。
+- `data/ppg_noise_generate.py`：PPG 伪影生成脚本，使用纯 Python 复现 `gen_PPG_artifacts.m` 的核心逻辑，生成噪声并导出 CSV、SVG 波形图、参数元数据与可选状态序列。
 - `data/visualize_signal.py`：信号网页可视化脚本，读取 `S*.pkl` 中的 ECG 与 PPG/BVP 信号，生成带概览图和按 chunk 动态加载明细图的静态网页查看器。
 - `tests/test_inspect_pickle_script.py`：验证 pickle 查看脚本对默认读取和 `latin1` 编码回退都可用。
+- `tests/test_ppg_noise_generate.py`：验证 PPG 伪影包装脚本的参数校验、SVG/CSV/JSON 落盘，以及外部执行器回写信号后的读取流程。
 - `tests/test_resample.py`：验证 PPG 上采样与 ECG 下采样后的长度和波形基本正确。
 - `tests/test_visualize_signal.py`：验证网页波形查看器能够生成网页与 chunk 资源，并正常读取 pickle。
 - `README.md`：项目说明、环境矩阵、训练/推理/测试命令、数据接口说明。

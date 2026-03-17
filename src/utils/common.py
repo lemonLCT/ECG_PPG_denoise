@@ -47,6 +47,7 @@ def save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: torch.cuda.amp.GradScaler | None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None,
     epoch: int,
     global_step: int,
     config: dict[str, Any],
@@ -63,6 +64,8 @@ def save_checkpoint(
     }
     if scaler is not None:
         payload["scaler"] = scaler.state_dict()
+    if scheduler is not None:
+        payload["scheduler"] = scheduler.state_dict()
     torch.save(payload, ckpt_path)
     return ckpt_path
 
@@ -72,6 +75,7 @@ def load_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     scaler: torch.cuda.amp.GradScaler | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
     """加载 checkpoint，并按需恢复优化器与 scaler。"""
@@ -81,6 +85,8 @@ def load_checkpoint(
         optimizer.load_state_dict(payload["optimizer"])
     if scaler is not None and "scaler" in payload:
         scaler.load_state_dict(payload["scaler"])
+    if scheduler is not None and "scheduler" in payload:
+        scheduler.load_state_dict(payload["scheduler"])
     return payload
 
 

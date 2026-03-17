@@ -1,7 +1,6 @@
-from .runner import ExperimentRunner, TrainEngine, sample_modality_mask
+from .runner import ExperimentRunner, TrainEngine
 
 __all__ = [
     "ExperimentRunner",
     "TrainEngine",
-    "sample_modality_mask",
 ]

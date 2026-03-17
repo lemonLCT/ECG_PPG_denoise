@@ -143,6 +143,38 @@ python evaluate.py --config src/config/base.yaml --checkpoint artifacts/runs/def
 
 数组形状支持 `[N, T]` 或 `[N, 1, T]`，内部会统一到 `[N, 1, T]`。
 
+## 数据脚本
+
+`data/ppg_noise_generate.py` 已用纯 Python 复现 `gen_PPG_artifacts.m` 的核心生成逻辑，不再依赖 MATLAB 或 Octave。脚本会生成 PPG 伪影，并同时导出 CSV、SVG 波形图和 JSON 元数据：
+
+```bash
+python data/ppg_noise_generate.py --duration-samples 4096 --sampling-rate-hz 64 --preset demo
+```
+
+如果要显式指定原函数的全部参数，可以这样调用：
+
+```bash
+python data/ppg_noise_generate.py \
+  --duration-samples 4096 \
+  --sampling-rate-hz 64 \
+  --prob 0.25 0.25 0.25 0.25 \
+  --dur-mu 12 4 4 4 4 \
+  --rms-shape 2 2 2 2 \
+  --rms-scale 0.35 0.45 0.55 0.75 \
+  --slope -6 -8 -10 -12
+```
+
+常用参数说明：
+- `--seed <int>`：固定随机种子，便于复现实验
+- `--output-dir <path>` 与 `--output-stem <name>`：控制输出目录和文件名前缀
+- `--save-states`：额外导出状态序列，0 表示无伪影，1-4 表示 4 类伪影
+
+脚本默认输出到 `artifacts/ppg_noise/`，生成：
+- `*.csv`：逐采样点的噪声序列
+- `*.svg`：可直接查看的波形图
+- `*.json`：运行时参数与元数据快照
+- `*_states.csv`：可选的状态序列输出
+
 ## 测试
 
 ```bash

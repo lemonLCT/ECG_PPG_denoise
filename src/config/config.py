@@ -9,10 +9,10 @@ T = TypeVar("T", bound="ExperimentConfig")
 
 @dataclass
 class RuntimeConfig:
-    experiment_name: str = "modality_flexible_diffusion"
+    experiment_name: str = "multimodal_diffusion"
     seed: int = 42
-    device: str = "cuda"
-    output_dir: str = "artifacts/runs/normal_train"
+    device: str = "cpu"
+    output_dir: str = "artifacts/runs/train"
     use_amp: bool = True
 
 
@@ -20,9 +20,9 @@ class RuntimeConfig:
 class DataConfig:
     data_path: str = ""
     num_workers: int = 0
-    val_ratio: float = 0.1
-    window_length: int = 512
-    window_stride: int = 256
+    val_ratio: float = 0.3
+    window_length: int = 500
+    window_stride: int = 250
     synthetic_num_samples: int = 1024
 
 
@@ -32,7 +32,7 @@ class PathConfig:
     checkpoint_path: str = ""
     infer_input_path: str = ""
     eval_input_path: str = ""
-    train_output_dir: str = "artifacts/runs/normal_train"
+    train_output_dir: str = "artifacts/runs/train"
     infer_output_path: str = "artifacts/infer/denoised_result.npz"
     eval_output_dir: str = "artifacts/eval"
 
@@ -44,6 +44,7 @@ class SingleEncoderConfig:
     kernel_sizes: list[int] = field(default_factory=lambda: [1, 3, 5, 7, 9, 11])
     output_channels: int = 96
     use_projection: bool = False
+    gn_groups: int = 8
 
     @property
     def resolved_output_channels(self) -> int:
@@ -82,17 +83,16 @@ class LossConfig:
 
 @dataclass
 class TrainConfig:
-    stage_name: str = "ecg_pretrain"
-    batch_size: int = 32
-    val_batch_size: int = 32
+    stage_name: str = "joint"
+    batch_size: int = 16
+    val_batch_size: int = 16
     epochs: int = 50
     lr: float = 1e-4
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
     log_interval: int = 20
-    save_every_epochs: int = 1
-    max_steps_per_epoch: int = 2000
-    modality_dropout: float = 0.1
+    save_every_epochs: int = 50
+    max_steps_per_epoch: int = 5000
 
 
 @dataclass
@@ -136,53 +136,20 @@ class ExperimentConfig:
             raise ValueError("window_length 和 window_stride 必须 > 0")
         if not self.path.train_output_dir:
             raise ValueError("path.train_output_dir 不能为空")
-        if not self.model.name:
-            raise ValueError("model.name 不能为空")
         if self.model.signal_length <= 0:
             raise ValueError("model.signal_length 必须 > 0")
         if self.model.cond_channels <= 0 or self.model.base_channels <= 0:
             raise ValueError("模型通道数必须 > 0")
         if self.model.joint_channels <= 0:
             raise ValueError("joint_channels 必须 > 0")
-
-        resolved_channels: dict[str, int] = {}
-        for encoder_name, encoder_cfg in (("ecg_encoder", self.model.ecg_encoder), ("ppg_encoder", self.model.ppg_encoder)):
-            if encoder_cfg.input_channels <= 0:
-                raise ValueError(f"{encoder_name}.input_channels 必须 > 0")
-            if encoder_cfg.branch_channels <= 0:
-                raise ValueError(f"{encoder_name}.branch_channels 必须 > 0")
-            if not encoder_cfg.kernel_sizes:
-                raise ValueError(f"{encoder_name}.kernel_sizes 不能为空")
-            if any(kernel <= 0 or kernel % 2 == 0 for kernel in encoder_cfg.kernel_sizes):
-                raise ValueError(f"{encoder_name}.kernel_sizes 必须全部为正奇数")
-            if encoder_cfg.use_projection and encoder_cfg.output_channels <= 0:
-                raise ValueError(f"{encoder_name}.output_channels 必须 > 0")
-            if encoder_cfg.resolved_output_channels <= 0:
-                raise ValueError(f"{encoder_name}.resolved_output_channels 必须 > 0")
-            resolved_channels[encoder_name] = encoder_cfg.resolved_output_channels
-
-        if resolved_channels["ecg_encoder"] != resolved_channels["ppg_encoder"]:
-            raise ValueError("ecg_encoder 和 ppg_encoder 的实际输出通道数必须一致")
-        if resolved_channels["ecg_encoder"] != self.model.cond_channels:
-            raise ValueError("model.cond_channels 必须等于 encoder 的实际输出通道数")
-        if self.model.quality_assessor.hidden_channels <= 0:
-            raise ValueError("quality_assessor.hidden_channels 必须 > 0")
-        if self.model.quality_assessor.output_channels != 1:
-            raise ValueError("quality_assessor.output_channels 当前必须为 1")
-        if self.model.diffusion_steps <= 1:
-            raise ValueError("diffusion_steps 必须 > 1")
-        if not (0.0 < self.model.beta_start < self.model.beta_end < 1.0):
-            raise ValueError("beta_start/beta_end 必须满足 0 < beta_start < beta_end < 1")
-        if not self.train.stage_name:
-            raise ValueError("train.stage_name 不能为空")
+        if self.train.stage_name not in {"ecg_pretrain", "ppg_pretrain", "joint"}:
+            raise ValueError("train.stage_name 必须是 ecg_pretrain / ppg_pretrain / joint 之一")
         if self.train.epochs <= 0:
             raise ValueError("epochs 必须 > 0")
         if self.train.lr <= 0.0:
             raise ValueError("lr 必须 > 0")
         if self.train.max_steps_per_epoch <= 0:
             raise ValueError("max_steps_per_epoch 必须 > 0")
-        if not (0.0 <= self.train.modality_dropout < 1.0):
-            raise ValueError("modality_dropout 必须在 [0, 1) 区间")
 
     def to_dict(self) -> Dict[str, Any]:
         self.sync_legacy_fields()
