@@ -54,7 +54,7 @@ pip install -r requirements-dev.txt
 
 ## 配置
 
-默认配置位于 [configs/experiment.yaml](/D:/Code/OriginCode/PyCharm_Project/ECG_PPG_denoise/configs/experiment.yaml)。
+默认配置位于 [base.yaml](/D:/Code/OriginCode/PyCharm_Project/ECG_PPG_denoise/src/config/base.yaml)。
 
 其中与当前训练逻辑最相关的字段：
 
@@ -70,9 +70,9 @@ pip install -r requirements-dev.txt
 三阶段训练示例：
 
 ```bash
-python train.py --config configs/experiment.yaml --stage ecg_pretrain
-python train.py --config configs/experiment.yaml --stage ppg_pretrain
-python train.py --config configs/experiment.yaml --stage joint
+python train.py --config src/config/base.yaml --stage ecg_pretrain
+python train.py --config src/config/base.yaml --stage ppg_pretrain
+python train.py --config src/config/base.yaml --stage joint
 ```
 
 常用参数：
@@ -98,7 +98,7 @@ python train.py --config configs/experiment.yaml --stage joint
 基础用法：
 
 ```bash
-python infer.py --config configs/experiment.yaml --checkpoint artifacts/runs/default/checkpoints/best.pt
+python infer.py --config src/config/base.yaml --checkpoint artifacts/runs/default/checkpoints/best.pt
 ```
 
 单模态与联合模式：
@@ -120,7 +120,7 @@ python infer.py --mode joint
 ## 评估
 
 ```bash
-python evaluate.py --config configs/experiment.yaml --checkpoint artifacts/runs/default/checkpoints/best.pt --input-path your_data.npz
+python evaluate.py --config src/config/base.yaml --checkpoint artifacts/runs/default/checkpoints/best.pt --input-path your_data.npz
 ```
 
 当前评估脚本聚焦 ECG 指标，支持：
