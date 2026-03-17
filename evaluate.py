@@ -8,6 +8,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -122,22 +123,32 @@ def main() -> int:
         noisy_ppg = noisy_ppg[: args.max_samples]
 
     denoised_chunks = []
-    for start in range(0, clean_ecg.shape[0], args.batch_size):
-        end = min(clean_ecg.shape[0], start + args.batch_size)
-        ecg_batch = torch.from_numpy(noisy_ecg[start:end]).float().to(device)
-        ppg_batch = torch.from_numpy(noisy_ppg[start:end]).float().to(device)
-        y_ecg, y_ppg, modality_mask = _select_inputs(args.mode, ecg_batch, ppg_batch)
+    total_samples = int(clean_ecg.shape[0])
+    total_batches = (total_samples + args.batch_size - 1) // args.batch_size if total_samples > 0 else 0
+    with tqdm(
+        range(0, total_samples, args.batch_size),
+        total=total_batches,
+        desc="Evaluate",
+        unit="batch",
+        dynamic_ncols=True,
+    ) as progress_bar:
+        for start in progress_bar:
+            end = min(total_samples, start + args.batch_size)
+            ecg_batch = torch.from_numpy(noisy_ecg[start:end]).float().to(device)
+            ppg_batch = torch.from_numpy(noisy_ppg[start:end]).float().to(device)
+            y_ecg, y_ppg, modality_mask = _select_inputs(args.mode, ecg_batch, ppg_batch)
 
-        with torch.no_grad():
-            result = model(
-                noisy_ecg=y_ecg,
-                noisy_ppg=y_ppg,
-                modality_mask=modality_mask,
-                train_gen_flag=1,
-                num_steps=args.num_steps,
-                use_ddim=args.use_ddim,
-            )
-        denoised_chunks.append(result["denoised_ecg"].detach().cpu().numpy())
+            with torch.no_grad():
+                result = model(
+                    noisy_ecg=y_ecg,
+                    noisy_ppg=y_ppg,
+                    modality_mask=modality_mask,
+                    train_gen_flag=1,
+                    num_steps=args.num_steps,
+                    use_ddim=args.use_ddim,
+                )
+            denoised_chunks.append(result["denoised_ecg"].detach().cpu().numpy())
+            progress_bar.set_postfix(processed=end, total=total_samples)
 
     denoised_ecg = np.concatenate(denoised_chunks, axis=0)
     metrics = compute_ecg_metrics(clean_ecg=clean_ecg, noisy_ecg=noisy_ecg, denoised_ecg=denoised_ecg)
