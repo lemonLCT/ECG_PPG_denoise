@@ -8,7 +8,7 @@ data:
   num_workers: 0
   val_ratio: 0.3
   window_length: 500
-  window_stride: 256
+  window_stride: 250
   synthetic_num_samples: 1024
 
 path:

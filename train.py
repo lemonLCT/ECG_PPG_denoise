@@ -107,11 +107,11 @@ def main() -> int:
     cfg = load_config(Path(args.config) if args.config else None)
     cfg = apply_overrides(cfg, args)
 
-    logger = build_logger("train")
-    device = resolve_device(cfg["runtime"]["device"])
-    seed_everything(int(cfg["runtime"]["seed"]))
     output_dir = ensure_dir(cfg["path"]["train_output_dir"])
     ckpt_dir = ensure_dir(output_dir / "checkpoints")
+    logger = build_logger("train", log_path=output_dir / "train.log")
+    device = resolve_device(cfg["runtime"]["device"])
+    seed_everything(int(cfg["runtime"]["seed"]))
     dump_config_snapshot(cfg, output_dir)
 
     logger.info("Git SHA: %s", _git_sha())
@@ -227,9 +227,6 @@ def main() -> int:
                 config=cfg,
             )
             logger.info("刷新 best checkpoint: %s (val_total=%.6f)", best_path, best_val)
-
-        logger.info("train_metrics=%s", train_metrics)
-        logger.info("val_metrics=%s", val_metrics)
 
     logger.info("训练完成")
     return 0
