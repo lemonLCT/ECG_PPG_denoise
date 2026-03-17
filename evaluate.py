@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from config import load_config
-from dataset import build_qt_train_val_datasets, load_multimodal_arrays
+from dataset import build_qt_test_dataset, load_multimodal_arrays
 from models import DDPM
 from utils.common import ensure_dir, resolve_device
 from utils.logging import build_logger
@@ -40,17 +40,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _stack_from_qt_val(noise_version: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    _, val_ds = build_qt_train_val_datasets(noise_version=noise_version)
-    clean_ecg = val_ds.clean_ecg.detach().cpu().numpy()
-    noisy_ecg = val_ds.noisy_ecg.detach().cpu().numpy()
-    noisy_ppg = val_ds.noisy_ppg.detach().cpu().numpy()
+def _stack_from_qt_test(noise_version: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    test_ds = build_qt_test_dataset(noise_version=noise_version)
+    clean_ecg = test_ds.clean_ecg.detach().cpu().numpy()
+    noisy_ecg = test_ds.noisy_ecg.detach().cpu().numpy()
+    noisy_ppg = test_ds.noisy_ppg.detach().cpu().numpy()
     return clean_ecg, noisy_ecg, noisy_ppg
 
 
 def _load_eval_arrays(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if args.use_qt_dataset:
-        return _stack_from_qt_val(noise_version=args.qt_noise_version)
+        return _stack_from_qt_test(noise_version=args.qt_noise_version)
     if args.input_path is None:
         raise ValueError("未启用 --use-qt-dataset 时，必须提供 --input-path")
     arrays = load_multimodal_arrays(args.input_path)

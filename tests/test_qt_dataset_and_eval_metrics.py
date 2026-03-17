@@ -10,7 +10,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 sys.modules.pop("utils", None)
 
-from dataset import QTDataset, unpack_qt_return
+from dataset import QTDataset, split_qt_train_val_arrays, unpack_qt_return
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -52,3 +52,27 @@ def test_compute_ecg_metrics_has_expected_keys() -> None:
     assert set(metrics.keys()) == expected
     for value in metrics.values():
         assert np.isfinite(value) or np.isnan(value)
+
+
+def test_split_qt_train_val_arrays_uses_train_only_and_keeps_7_3_ratio() -> None:
+    total = 10
+    train_noisy = np.arange(total * 8, dtype=np.float32).reshape(total, 8)
+    train_clean = train_noisy + 1000.0
+
+    split_train_noisy, split_train_clean, val_noisy, val_clean = split_qt_train_val_arrays(
+        train_noisy_ecg=train_noisy,
+        train_clean_ecg=train_clean,
+        val_ratio=0.3,
+        seed=123,
+    )
+
+    assert split_train_noisy.shape[0] == 7
+    assert split_train_clean.shape[0] == 7
+    assert val_noisy.shape[0] == 3
+    assert val_clean.shape[0] == 3
+
+    train_rows = {tuple(row.tolist()) for row in split_train_noisy.reshape(split_train_noisy.shape[0], -1)}
+    val_rows = {tuple(row.tolist()) for row in val_noisy.reshape(val_noisy.shape[0], -1)}
+    full_rows = {tuple(row.tolist()) for row in train_noisy.reshape(train_noisy.shape[0], -1)}
+    assert train_rows.isdisjoint(val_rows)
+    assert train_rows | val_rows == full_rows

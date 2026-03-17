@@ -171,7 +171,11 @@ def build_train_val_datasets(
     qt_noise_version: int = 1,
 ) -> Tuple[Dataset, Dataset]:
     if use_qt_dataset:
-        return build_qt_train_val_datasets(noise_version=qt_noise_version)
+        return build_qt_train_val_datasets(
+            noise_version=qt_noise_version,
+            val_ratio=cfg.val_ratio,
+            seed=seed,
+        )
 
     if cfg.data_path and Path(cfg.data_path).exists():
         train_ds: Dataset = MultimodalSignalDataset(

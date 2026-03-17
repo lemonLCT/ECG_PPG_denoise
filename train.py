@@ -120,7 +120,11 @@ def main() -> int:
 
     data_cfg = build_data_namespace(cfg)
     if args.use_qt_dataset:
-        train_ds, val_ds = build_qt_train_val_datasets(noise_version=args.qt_noise_version)
+        train_ds, val_ds = build_qt_train_val_datasets(
+            noise_version=args.qt_noise_version,
+            val_ratio=float(cfg["data"]["val_ratio"]),
+            seed=int(cfg["runtime"]["seed"]),
+        )
     else:
         train_ds, val_ds = build_train_val_datasets(
             data_cfg,

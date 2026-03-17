@@ -22,7 +22,7 @@ def _to_channel_first(arr: np.ndarray, name: str) -> np.ndarray:
 
 
 def unpack_qt_return(dataset_return: Sequence[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """将 Data_Preparation 返回值整理为 channel-first 的 ECG 训练/验证数组。"""
+    """将 Data_Preparation 返回值整理为 channel-first 的 ECG 训练/测试数组。"""
     if len(dataset_return) != 4:
         raise ValueError("Data_Preparation 返回值长度必须是 4: [X_train, y_train, X_test, y_test]")
     x_train, y_train, x_test, y_test = dataset_return
@@ -76,7 +76,7 @@ def _resolve_qt_data_root() -> Path:
     ).exists():
         return data_root
     raise FileNotFoundError(
-        "未找到 QT/NSTDB 数据目录。当前 fix 链路要求数据位于 "
+        "未找到 QT/NSTDB 数据目录。当前 QT 数据要求位于 "
         f"{data_root}，且其中包含 qt-database-1.0.0 和 "
         "mit-bih-noise-stress-test-database-1.0.0。"
     )
@@ -87,8 +87,8 @@ def load_qt_arrays(noise_version: int = 1) -> tuple[np.ndarray, np.ndarray, np.n
     调用 QT Data_Preparation，并返回:
     - `train_noisy_ecg:[N,1,T]`
     - `train_clean_ecg:[N,1,T]`
-    - `val_noisy_ecg:[M,1,T]`
-    - `val_clean_ecg:[M,1,T]`
+    - `test_noisy_ecg:[M,1,T]`
+    - `test_clean_ecg:[M,1,T]`
     """
     selected_data_root = _resolve_qt_data_root()
     from data.Data_Preparation.data_preparation import Data_Preparation
@@ -97,9 +97,74 @@ def load_qt_arrays(noise_version: int = 1) -> tuple[np.ndarray, np.ndarray, np.n
     return unpack_qt_return(dataset_return)
 
 
-def build_qt_train_val_datasets(noise_version: int = 1) -> tuple[QTDataset, QTDataset]:
-    """构造 QT 专用训练/验证数据集。"""
-    train_noisy_ecg, train_clean_ecg, val_noisy_ecg, val_clean_ecg = load_qt_arrays(noise_version=noise_version)
-    train_ds = QTDataset(noisy_ecg=train_noisy_ecg, clean_ecg=train_clean_ecg)
+def split_qt_train_val_arrays(
+    train_noisy_ecg: np.ndarray,
+    train_clean_ecg: np.ndarray,
+    val_ratio: float = 0.3,
+    seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """从 QT 训练集内部再切分 train/val，测试集保持独立。"""
+    if train_noisy_ecg.shape != train_clean_ecg.shape:
+        raise ValueError(
+            f"train_noisy_ecg 和 train_clean_ecg 形状不一致: {train_noisy_ecg.shape} vs {train_clean_ecg.shape}"
+        )
+    if not 0.0 < float(val_ratio) < 1.0:
+        raise ValueError(f"val_ratio 必须在 (0, 1) 内，实际为 {val_ratio}")
+
+    total = int(train_noisy_ecg.shape[0])
+    if total < 2:
+        raise ValueError(f"QT 训练样本数量过少，无法再切分 train/val: {total}")
+
+    indices = np.arange(total)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+
+    val_count = int(round(total * float(val_ratio)))
+    val_count = min(max(1, val_count), total - 1)
+    val_indices = indices[:val_count]
+    train_indices = indices[val_count:]
+    return (
+        train_noisy_ecg[train_indices],
+        train_clean_ecg[train_indices],
+        train_noisy_ecg[val_indices],
+        train_clean_ecg[val_indices],
+    )
+
+
+def build_qt_train_val_test_datasets(
+    noise_version: int = 1,
+    val_ratio: float = 0.3,
+    seed: int = 42,
+) -> tuple[QTDataset, QTDataset, QTDataset]:
+    """构造 QT 训练/验证/测试三段数据集。"""
+    train_noisy_ecg, train_clean_ecg, test_noisy_ecg, test_clean_ecg = load_qt_arrays(noise_version=noise_version)
+    split_train_noisy, split_train_clean, val_noisy_ecg, val_clean_ecg = split_qt_train_val_arrays(
+        train_noisy_ecg=train_noisy_ecg,
+        train_clean_ecg=train_clean_ecg,
+        val_ratio=val_ratio,
+        seed=seed,
+    )
+    train_ds = QTDataset(noisy_ecg=split_train_noisy, clean_ecg=split_train_clean)
     val_ds = QTDataset(noisy_ecg=val_noisy_ecg, clean_ecg=val_clean_ecg)
+    test_ds = QTDataset(noisy_ecg=test_noisy_ecg, clean_ecg=test_clean_ecg)
+    return train_ds, val_ds, test_ds
+
+
+def build_qt_train_val_datasets(
+    noise_version: int = 1,
+    val_ratio: float = 0.3,
+    seed: int = 42,
+) -> tuple[QTDataset, QTDataset]:
+    """构造 QT 训练/验证数据集；验证集从训练集内部切分。"""
+    train_ds, val_ds, _ = build_qt_train_val_test_datasets(
+        noise_version=noise_version,
+        val_ratio=val_ratio,
+        seed=seed,
+    )
     return train_ds, val_ds
+
+
+def build_qt_test_dataset(noise_version: int = 1) -> QTDataset:
+    """构造 QT 独立测试集。"""
+    _, _, test_ds = build_qt_train_val_test_datasets(noise_version=noise_version)
+    return test_ds
