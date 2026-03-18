@@ -26,40 +26,33 @@ def test_predict_noise_outputs_expected_shapes() -> None:
     batch_size, length = 2, 64
     x_t_ecg = torch.randn(batch_size, 1, length)
     x_t_ppg = torch.randn(batch_size, 1, length)
-    cond_ecg = torch.randn(batch_size, 1, length)
-    cond_ppg = torch.randn(batch_size, 1, length)
+    noisy_ecg = torch.randn(batch_size, 1, length)
+    noisy_ppg = torch.randn(batch_size, 1, length)
     t = torch.randint(low=0, high=model.diffusion.num_steps, size=(batch_size,))
     mask = torch.tensor([1.0, 1.0])
     encoded = model._encode_training_features(
-        clean_ecg=cond_ecg,
-        clean_ppg=cond_ppg,
-        noisy_ecg=cond_ecg,
-        noisy_ppg=cond_ppg,
+        noisy_ecg=noisy_ecg,
+        noisy_ppg=noisy_ppg,
         modality_mask=mask,
     )
 
     out = model.predict_noise_from_xt(
         x_t_ecg=x_t_ecg,
         x_t_ppg=x_t_ppg,
-        clean_feat_ecg=encoded["clean_feat_ecg"],
-        clean_feat_ppg=encoded["clean_feat_ppg"],
         noisy_feat_ecg=encoded["noisy_feat_ecg"],
         noisy_feat_ppg=encoded["noisy_feat_ppg"],
         t=t,
-        modality_mask=mask,
     )
 
     assert out["pred_noise_pair"].shape == (batch_size, 2, length)
     assert out["pred_noise_ecg"].shape == (batch_size, 1, length)
     assert out["pred_noise_ppg"].shape == (batch_size, 1, length)
-    assert out["clean_feat_ecg"].shape[0] == batch_size
-    assert out["clean_feat_ecg"].shape[-1] == length
-    assert out["clean_feat_ppg"].shape[0] == batch_size
-    assert out["clean_feat_ppg"].shape[-1] == length
     assert out["noisy_feat_ecg"].shape[0] == batch_size
     assert out["noisy_feat_ecg"].shape[-1] == length
     assert out["noisy_feat_ppg"].shape[0] == batch_size
     assert out["noisy_feat_ppg"].shape[-1] == length
+    assert out["c_ecg"].shape[1] == model.ecg_feature_channels
+    assert out["c_ppg"].shape[1] == model.ppg_feature_channels
     assert out["c_ecg"].shape[0] == batch_size
     assert out["c_ecg"].shape[-1] == length
     assert out["c_ppg"].shape[0] == batch_size
@@ -114,6 +107,7 @@ def test_missing_modality_uses_gaussian_placeholder_for_noisy_path() -> None:
     )
 
     assert not torch.allclose(out["x_t_ppg"], torch.zeros_like(out["x_t_ppg"]))
+    assert torch.allclose(out["noisy_feat_ppg"], torch.zeros_like(out["noisy_feat_ppg"]))
 
 
 def test_generate_masks_missing_modality_output() -> None:

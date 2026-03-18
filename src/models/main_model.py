@@ -19,7 +19,7 @@ class DDPM(nn.Module):
     - `forward(...)` 根据模态组合分发到单模态或双模态训练路径
 
     推理:
-    - `generate(...)` 返回生成/去噪结果
+    - `generate(...)` 仅使用 noisy 条件信号，通过逆扩散生成去噪结果
     """
 
     def __init__(self, base_model: nn.Module | type[nn.Module] | None, config: dict, device: str | torch.device) -> None:
@@ -28,13 +28,11 @@ class DDPM(nn.Module):
         self.device_obj = torch.device(device)
         self.model_cfg = config["model"]
 
-        self.clean_ecg_encoder = SingleEncoder1D(self.model_cfg["ecg_encoder"])
-        self.clean_ppg_encoder = SingleEncoder1D(self.model_cfg["ppg_encoder"])
         self.noisy_ecg_encoder = SingleEncoder1D(self.model_cfg["ecg_encoder"])
         self.noisy_ppg_encoder = SingleEncoder1D(self.model_cfg["ppg_encoder"])
 
-        self.ecg_feature_channels = self.clean_ecg_encoder.out_channels
-        self.ppg_feature_channels = self.clean_ppg_encoder.out_channels
+        self.ecg_feature_channels = self.noisy_ecg_encoder.out_channels
+        self.ppg_feature_channels = self.noisy_ppg_encoder.out_channels
         if self.ecg_feature_channels != self.ppg_feature_channels:
             raise ValueError(
                 "ECG 和 PPG encoder 的输出通道必须一致，"
@@ -90,7 +88,7 @@ class DDPM(nn.Module):
 
     @staticmethod
     def _fill_missing_noisy_pair(ecg: Tensor, ppg: Tensor, modality_mask: Tensor) -> tuple[Tensor, Tensor]:
-        """将缺失模态的 noisy/noised 信号替换为同形状高斯噪声。"""
+        """将缺失模态的 noisy 信号替换为同形状高斯噪声。"""
         ecg_mask = modality_mask[0].view(1, 1, 1)
         ppg_mask = modality_mask[1].view(1, 1, 1)
         noisy_ecg = ecg * ecg_mask + torch.randn_like(ecg) * (1.0 - ecg_mask)
@@ -99,44 +97,21 @@ class DDPM(nn.Module):
 
     def _encode_training_features(
         self,
-        clean_ecg: Tensor,
-        clean_ppg: Tensor,
         noisy_ecg: Tensor,
         noisy_ppg: Tensor,
         modality_mask: Tensor,
     ) -> Dict[str, Tensor]:
         """
         输入:
-        - `clean_ecg/clean_ppg/noisy_ecg/noisy_ppg:[B,1,T]`
-        - `modality_mask:[2]`
-
-        输出:
-        - `clean_feat_ecg/clean_feat_ppg/noisy_feat_ecg/noisy_feat_ppg:[B,C,T]`
-        """
-        return {
-            "clean_feat_ecg": self.clean_ecg_encoder(clean_ecg, modality_mask[0]),
-            "clean_feat_ppg": self.clean_ppg_encoder(clean_ppg, modality_mask[1]),
-            "noisy_feat_ecg": self.noisy_ecg_encoder(noisy_ecg, modality_mask[0]),
-            "noisy_feat_ppg": self.noisy_ppg_encoder(noisy_ppg, modality_mask[1]),
-        }
-
-    def _encode_generation_features(self, noisy_ecg: Tensor, noisy_ppg: Tensor, modality_mask: Tensor) -> Dict[str, Tensor]:
-        """
-        输入:
         - `noisy_ecg/noisy_ppg:[B,1,T]`
         - `modality_mask:[2]`
 
         输出:
-        - `clean_feat_*:[B,C,T]`，推理阶段置零
-        - `noisy_feat_*:[B,C,T]`
+        - `noisy_feat_ecg/noisy_feat_ppg:[B,C,T]`
         """
-        noisy_feat_ecg = self.noisy_ecg_encoder(noisy_ecg, modality_mask[0])
-        noisy_feat_ppg = self.noisy_ppg_encoder(noisy_ppg, modality_mask[1])
         return {
-            "clean_feat_ecg": torch.zeros_like(noisy_feat_ecg),
-            "clean_feat_ppg": torch.zeros_like(noisy_feat_ppg),
-            "noisy_feat_ecg": noisy_feat_ecg,
-            "noisy_feat_ppg": noisy_feat_ppg,
+            "noisy_feat_ecg": self.noisy_ecg_encoder(noisy_ecg, modality_mask[0]),
+            "noisy_feat_ppg": self.noisy_ppg_encoder(noisy_ppg, modality_mask[1]),
         }
 
     def _build_diffusion_targets(self, clean_ecg: Tensor, clean_ppg: Tensor) -> Dict[str, Tensor]:
@@ -168,31 +143,22 @@ class DDPM(nn.Module):
         self,
         x_t_ecg: Tensor,
         x_t_ppg: Tensor,
-        clean_feat_ecg: Tensor,
-        clean_feat_ppg: Tensor,
         noisy_feat_ecg: Tensor,
         noisy_feat_ppg: Tensor,
         t: Tensor,
-        modality_mask: Tensor,
     ) -> Dict[str, Tensor]:
         x_t_ecg = self._ensure_3d(x_t_ecg, "x_t_ecg")
         x_t_ppg = self._ensure_3d(x_t_ppg, "x_t_ppg")
-        clean_feat_ecg = self._ensure_feature_3d(clean_feat_ecg, "clean_feat_ecg")
-        clean_feat_ppg = self._ensure_feature_3d(clean_feat_ppg, "clean_feat_ppg")
         noisy_feat_ecg = self._ensure_feature_3d(noisy_feat_ecg, "noisy_feat_ecg")
         noisy_feat_ppg = self._ensure_feature_3d(noisy_feat_ppg, "noisy_feat_ppg")
         if x_t_ecg.shape != x_t_ppg.shape:
             raise ValueError("x_t_ecg 和 x_t_ppg 形状必须一致")
-        modality_mask = self._validate_modality_mask(modality_mask, x_t_ecg.device, x_t_ecg.dtype)
         return self.base_model(
             x_t_ecg=x_t_ecg,
             x_t_ppg=x_t_ppg,
-            clean_feat_ecg=clean_feat_ecg,
-            clean_feat_ppg=clean_feat_ppg,
             noisy_feat_ecg=noisy_feat_ecg,
             noisy_feat_ppg=noisy_feat_ppg,
             t=t,
-            modality_mask=modality_mask,
         )
 
     def one_modal_train(
@@ -213,7 +179,7 @@ class DDPM(nn.Module):
         输出:
         - `total_loss:[]`
         - `diffusion_loss:[]`
-        - 以及训练中间量
+        - 以及训练中间结果
         """
         modality_mask = self._validate_modality_mask(modality_mask, clean_ecg.device, clean_ecg.dtype)
         if int(modality_mask.sum().item()) != 1:
@@ -222,16 +188,13 @@ class DDPM(nn.Module):
         clean_ecg, clean_ppg = self._mask_signal_pair(clean_ecg, clean_ppg, modality_mask)
         noisy_ecg, noisy_ppg = self._fill_missing_noisy_pair(noisy_ecg, noisy_ppg, modality_mask)
         diffusion_targets = self._build_diffusion_targets(clean_ecg, clean_ppg)
-        encoded = self._encode_training_features(clean_ecg, clean_ppg, noisy_ecg, noisy_ppg, modality_mask)
+        encoded = self._encode_training_features(noisy_ecg, noisy_ppg, modality_mask)
         outputs = self.predict_noise_from_xt(
             x_t_ecg=diffusion_targets["x_t_ecg"],
             x_t_ppg=diffusion_targets["x_t_ppg"],
-            clean_feat_ecg=encoded["clean_feat_ecg"],
-            clean_feat_ppg=encoded["clean_feat_ppg"],
             noisy_feat_ecg=encoded["noisy_feat_ecg"],
             noisy_feat_ppg=encoded["noisy_feat_ppg"],
             t=diffusion_targets["t"],
-            modality_mask=modality_mask,
         )
 
         ecg_loss = torch.zeros((), device=clean_ecg.device, dtype=clean_ecg.dtype)
@@ -271,20 +234,17 @@ class DDPM(nn.Module):
         输出:
         - `total_loss:[]`
         - `diffusion_loss:[]`
-        - 以及训练中间量
+        - 以及训练中间结果
         """
         modality_mask = torch.tensor([1.0, 1.0], device=clean_ecg.device, dtype=clean_ecg.dtype)
         diffusion_targets = self._build_diffusion_targets(clean_ecg, clean_ppg)
-        encoded = self._encode_training_features(clean_ecg, clean_ppg, noisy_ecg, noisy_ppg, modality_mask)
+        encoded = self._encode_training_features(noisy_ecg, noisy_ppg, modality_mask)
         outputs = self.predict_noise_from_xt(
             x_t_ecg=diffusion_targets["x_t_ecg"],
             x_t_ppg=diffusion_targets["x_t_ppg"],
-            clean_feat_ecg=encoded["clean_feat_ecg"],
-            clean_feat_ppg=encoded["clean_feat_ppg"],
             noisy_feat_ecg=encoded["noisy_feat_ecg"],
             noisy_feat_ppg=encoded["noisy_feat_ppg"],
             t=diffusion_targets["t"],
-            modality_mask=modality_mask,
         )
 
         ecg_loss = self.loss_fn(outputs["pred_noise_ecg"], diffusion_targets["noise_ecg"])
@@ -310,44 +270,42 @@ class DDPM(nn.Module):
         num_steps: Optional[int],
         use_ddim: bool,
     ) -> Dict[str, Tensor]:
+        """
+        推理流程：
+        1. 输入 `noisy_ecg/noisy_ppg`
+        2. 编码 noisy 条件特征
+        3. 初始化 `x_T ~ N(0, I)`，形状为 `[B,2,T]`
+        4. 每一步用当前 `x_t` 和 noisy 条件特征预测 `pred_eps`
+        5. 由扩散公式得到 `x_{t-1}`
+        6. 最终输出 `x_0` 的两路估计
+        """
         modality_mask = self._validate_modality_mask(modality_mask, noisy_ecg.device, noisy_ecg.dtype)
         noisy_ecg, noisy_ppg = self._fill_missing_noisy_pair(noisy_ecg, noisy_ppg, modality_mask)
-        encoded = self._encode_generation_features(noisy_ecg, noisy_ppg, modality_mask)
+        encoded = self._encode_training_features(noisy_ecg, noisy_ppg, modality_mask)
         batch_size, _, length = noisy_ecg.shape
         device = noisy_ecg.device
-        x_t_pair = torch.randn(batch_size, 2, length, device=device, dtype=noisy_ecg.dtype)
-        total_steps = self.diffusion.num_steps if num_steps is None else int(num_steps)
-        if total_steps <= 0:
-            raise ValueError("num_steps 必须大于 0")
 
-        time_grid = torch.linspace(
-            self.diffusion.num_steps - 1,
-            0,
-            steps=total_steps,
-            device=device,
-            dtype=torch.float32,
-        ).long()
-
-        for scalar_t in time_grid:
-            t = torch.full((batch_size,), int(scalar_t.item()), device=device, dtype=torch.long)
-            out = self.predict_noise_from_xt(
+        def pred_eps_fn(x_t_pair: Tensor, t: Tensor) -> Tensor:
+            outputs = self.predict_noise_from_xt(
                 x_t_ecg=x_t_pair[:, 0:1, :],
                 x_t_ppg=x_t_pair[:, 1:2, :],
-                clean_feat_ecg=encoded["clean_feat_ecg"],
-                clean_feat_ppg=encoded["clean_feat_ppg"],
                 noisy_feat_ecg=encoded["noisy_feat_ecg"],
                 noisy_feat_ppg=encoded["noisy_feat_ppg"],
                 t=t,
-                modality_mask=modality_mask,
             )
-            pred_eps = torch.cat([out["pred_noise_ecg"], out["pred_noise_ppg"]], dim=1)
-            if use_ddim:
-                x_t_pair = self.diffusion.ddim_sample_step(x_t_pair, t, pred_eps)
-            else:
-                x_t_pair = self.diffusion.p_sample(x_t_pair, t, pred_eps)
+            return outputs["pred_noise_pair"]
 
-        denoised_ecg = x_t_pair[:, 0:1, :]
-        denoised_ppg = x_t_pair[:, 1:2, :]
+        x0_pair = self.diffusion.sample_loop(
+            shape=(batch_size, 2, length),
+            pred_eps_fn=pred_eps_fn,
+            num_sampling_steps=num_steps,
+            use_ddim=use_ddim,
+            device=device,
+            dtype=noisy_ecg.dtype,
+        )
+
+        denoised_ecg = x0_pair[:, 0:1, :]
+        denoised_ppg = x0_pair[:, 1:2, :]
         denoised_ecg, denoised_ppg = self._mask_signal_pair(denoised_ecg, denoised_ppg, modality_mask)
         return {
             "denoised_ecg": denoised_ecg,
