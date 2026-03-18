@@ -38,6 +38,42 @@ class PathConfig:
 
 
 @dataclass
+class BidmcPathConfig:
+    bidmc_root: str = "D:/Code/data/bidmc-ppg-and-respiration-dataset-1.0.0"
+
+
+@dataclass
+class BidmcDataConfig:
+    window_length: int = 500
+    window_stride: int = 250
+    sampling_rate_hz: float = 125.0
+    split_seed: int = 42
+    train_ratio: float = 0.7
+    val_ratio: float = 0.15
+    test_ratio: float = 0.15
+    normalization: str = "window_minmax"
+    ecg_channel_name: str = "II"
+    ppg_channel_name: str = "PLETH"
+    ecg_noise_version: int = 1
+    ecg_noise_ratio_range: list[float] = field(default_factory=lambda: [0.2, 2.0])
+    bidmc_ppg_noise_seed: int = 2024
+    ppg_noise_ratio_range: list[float] = field(default_factory=lambda: [0.2, 2.0])
+    ppg_noise_artifact_param_path: str = ""
+    ppg_noise_artifact_types: list[int] = field(default_factory=lambda: [1, 1, 1, 1])
+    ppg_noise_dur_mu: list[float] = field(default_factory=lambda: [10.0, 10.0, 10.0, 10.0, 10.0])
+    ppg_noise_rms_shape: list[float] = field(default_factory=lambda: [2.0, 2.0, 2.0, 2.0])
+    ppg_noise_rms_scale: list[float] = field(default_factory=lambda: [0.35, 0.45, 0.55, 0.75])
+    ppg_noise_slope_mean: list[float] = field(default_factory=lambda: [-6.0, -8.0, -10.0, -12.0])
+    ppg_noise_slope_std: list[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+
+
+@dataclass
+class BidmcConfig:
+    path: BidmcPathConfig = field(default_factory=BidmcPathConfig)
+    data: BidmcDataConfig = field(default_factory=BidmcDataConfig)
+
+
+@dataclass
 class SingleEncoderConfig:
     input_channels: int = 1
     branch_channels: int = 16
@@ -90,7 +126,6 @@ class TrainConfig:
     lr: float = 1e-4
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
-    log_interval: int = 20
     save_every_epochs: int = 50
     max_steps_per_epoch: int = 5000
 
@@ -100,6 +135,7 @@ class ExperimentConfig:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     data: DataConfig = field(default_factory=DataConfig)
     path: PathConfig = field(default_factory=PathConfig)
+    bidmc: BidmcConfig = field(default_factory=BidmcConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
@@ -131,11 +167,17 @@ class ExperimentConfig:
         if self.train.batch_size <= 0 or self.train.val_batch_size <= 0:
             raise ValueError("batch_size 和 val_batch_size 必须 > 0")
         if not (0.0 <= self.data.val_ratio < 1.0):
-            raise ValueError("val_ratio 必须在 [0, 1) 区间")
+            raise ValueError("data.val_ratio 必须在 [0, 1) 区间")
         if self.data.window_length <= 0 or self.data.window_stride <= 0:
-            raise ValueError("window_length 和 window_stride 必须 > 0")
+            raise ValueError("data.window_length 和 data.window_stride 必须 > 0")
         if not self.path.train_output_dir:
             raise ValueError("path.train_output_dir 不能为空")
+        if self.bidmc.data.window_length <= 0 or self.bidmc.data.window_stride <= 0:
+            raise ValueError("bidmc.data.window_length 和 bidmc.data.window_stride 必须 > 0")
+        if abs((self.bidmc.data.train_ratio + self.bidmc.data.val_ratio + self.bidmc.data.test_ratio) - 1.0) > 1e-6:
+            raise ValueError("bidmc.data.train_ratio + val_ratio + test_ratio 必须等于 1")
+        if self.bidmc.data.normalization != "window_minmax":
+            raise ValueError("bidmc.data.normalization 当前仅支持 window_minmax")
         if self.model.signal_length <= 0:
             raise ValueError("model.signal_length 必须 > 0")
         if self.model.cond_channels <= 0 or self.model.base_channels <= 0:
@@ -158,8 +200,14 @@ class ExperimentConfig:
     @classmethod
     def from_flat_dict(cls: Type[T], payload: Dict[str, Any]) -> T:
         runtime = RuntimeConfig(**payload.get("runtime", {}))
-        data = DataConfig(**payload.get("dataset", {}))
+        data = DataConfig(**payload.get("data", {}))
         path = PathConfig(**payload.get("path", {}))
+
+        bidmc_payload = dict(payload.get("bidmc", {}))
+        bidmc = BidmcConfig(
+            path=BidmcPathConfig(**bidmc_payload.get("path", {})),
+            data=BidmcDataConfig(**bidmc_payload.get("data", {})),
+        )
 
         model_payload = dict(payload.get("model", {}))
         ecg_encoder = SingleEncoderConfig(**model_payload.pop("ecg_encoder", {}))
@@ -174,6 +222,6 @@ class ExperimentConfig:
 
         loss = LossConfig(**payload.get("loss", {}))
         train = TrainConfig(**payload.get("train", {}))
-        cfg = cls(runtime=runtime, data=data, path=path, model=model, loss=loss, train=train)
+        cfg = cls(runtime=runtime, data=data, path=path, bidmc=bidmc, model=model, loss=loss, train=train)
         cfg.validate()
         return cfg

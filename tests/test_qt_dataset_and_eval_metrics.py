@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
@@ -16,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import evaluate
 from evaluate import build_noise_segment_summary, compute_ecg_metric_arrays, compute_ecg_metrics, summarize_metric_arrays
 
 
@@ -107,3 +109,35 @@ def test_split_qt_train_val_arrays_uses_train_only_and_keeps_7_3_ratio() -> None
     full_rows = {tuple(row.tolist()) for row in train_noisy.reshape(train_noisy.shape[0], -1)}
     assert train_rows.isdisjoint(val_rows)
     assert train_rows | val_rows == full_rows
+
+
+def test_load_eval_arrays_can_switch_to_bidmc(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeDataset:
+        def __len__(self) -> int:
+            return 2
+
+        def __getitem__(self, index: int):
+            base = np.full((1, 8), float(index), dtype=np.float32)
+            return {
+                "clean_ecg": base,
+                "noisy_ecg": base + 0.1,
+                "clean_ppg": base + 0.2,
+                "noisy_ppg": base + 0.3,
+                "modality_mask": torch.tensor([1.0, 1.0], dtype=torch.float32),
+            }
+
+    def fake_build_bidmc_test_dataset(*, config):
+        calls.append("bidmc")
+        assert "bidmc" in config
+        return FakeDataset()
+
+    monkeypatch.setattr(evaluate, "build_bidmc_test_dataset", fake_build_bidmc_test_dataset)
+    args = SimpleNamespace(use_bidmc_dataset=True, use_qt_dataset=False, qt_noise_version=1, input_path=None)
+
+    arrays = evaluate._load_eval_arrays(args, {"bidmc": {"path": {"bidmc_root": "unused"}}})
+
+    assert calls == ["bidmc"]
+    assert arrays["clean_ecg"].shape == (2, 1, 8)
+    assert arrays["noisy_ppg"].shape == (2, 1, 8)

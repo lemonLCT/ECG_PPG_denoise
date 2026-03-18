@@ -16,7 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from config import load_config
-from dataset import build_qt_test_dataset, load_multimodal_arrays
+from dataset import build_bidmc_test_dataset, build_qt_test_dataset, load_multimodal_arrays
 from models import DDPM
 from utils.common import ensure_dir, resolve_device
 from utils.logging import build_logger
@@ -27,38 +27,66 @@ DEFAULT_NOISE_SEGMENTS = (0.2, 0.6, 1.0, 1.5, 2.0)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="参照 DeScoD-ECG 风格评估 ECG 去噪指标")
+    parser = argparse.ArgumentParser(description="评估 ECG 去噪指标")
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument("--checkpoint", type=str, default=None, help="模型 checkpoint 路径")
-    parser.add_argument("--input-path", type=str, default=None, help="输入数据(.npz/.pt/.npy)")
-    parser.add_argument("--use-qt-dataset", action="store_true", help="使用 QT Data_Preparation 评估集")
+    parser.add_argument("--input-path", type=str, default=None, help="输入数据(.npz/.pt/.npy)或 BIDMC 数据根目录")
+    parser.add_argument("--use-bidmc-dataset", action="store_true", help="使用 BIDMC 测试集评估")
+    parser.add_argument("--use-qt-dataset", action="store_true", help="使用 QT Data_Preparation 测试集评估")
     parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本")
     parser.add_argument("--mode", type=str, default="ecg", choices=["ecg", "ppg", "joint"], help="推理模式")
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--use-ddim", action="store_true")
-    parser.add_argument("--shots", type=int, default=1, help="同一样本重复采样次数，>1 时取平均")
+    parser.add_argument("--shots", type=int, default=1, help="同一样本重复采样次数，>1 时取均值")
     parser.add_argument("--max-samples", type=int, default=0, help=">0 时仅评估前 N 条")
     parser.add_argument("--output-dir", type=str, default=None)
     return parser.parse_args()
 
 
-def _stack_from_qt_test(noise_version: int) -> dict[str, np.ndarray]:
-    test_ds = build_qt_test_dataset(noise_version=noise_version)
+def _stack_from_dataset(dataset) -> dict[str, np.ndarray]:
+    if len(dataset) == 0:
+        raise ValueError("评估数据集不能为空")
+
+    clean_ecg: list[np.ndarray] = []
+    noisy_ecg: list[np.ndarray] = []
+    clean_ppg: list[np.ndarray] = []
+    noisy_ppg: list[np.ndarray] = []
+    for index in range(len(dataset)):
+        sample = dataset[index]
+        clean_ecg.append(np.asarray(sample["clean_ecg"], dtype=np.float32))
+        noisy_ecg.append(np.asarray(sample["noisy_ecg"], dtype=np.float32))
+        clean_ppg.append(np.asarray(sample["clean_ppg"], dtype=np.float32))
+        noisy_ppg.append(np.asarray(sample["noisy_ppg"], dtype=np.float32))
+
     return {
-        "clean_ecg": test_ds.clean_ecg.detach().cpu().numpy(),
-        "noisy_ecg": test_ds.noisy_ecg.detach().cpu().numpy(),
-        "clean_ppg": test_ds.clean_ppg.detach().cpu().numpy(),
-        "noisy_ppg": test_ds.noisy_ppg.detach().cpu().numpy(),
+        "clean_ecg": np.stack(clean_ecg, axis=0).astype(np.float32),
+        "noisy_ecg": np.stack(noisy_ecg, axis=0).astype(np.float32),
+        "clean_ppg": np.stack(clean_ppg, axis=0).astype(np.float32),
+        "noisy_ppg": np.stack(noisy_ppg, axis=0).astype(np.float32),
     }
 
 
-def _load_eval_arrays(args: argparse.Namespace) -> dict[str, np.ndarray]:
+def _stack_from_qt_test(noise_version: int) -> dict[str, np.ndarray]:
+    test_ds = build_qt_test_dataset(noise_version=noise_version)
+    return _stack_from_dataset(test_ds)
+
+
+def _stack_from_bidmc_test(config: dict) -> dict[str, np.ndarray]:
+    test_ds = build_bidmc_test_dataset(config=config)
+    return _stack_from_dataset(test_ds)
+
+
+def _load_eval_arrays(args: argparse.Namespace, cfg: dict) -> dict[str, np.ndarray]:
+    if args.use_bidmc_dataset and args.use_qt_dataset:
+        raise ValueError("BIDMC 与 QT 数据集开关不能同时启用")
+    if args.use_bidmc_dataset:
+        return _stack_from_bidmc_test(config=cfg)
     if args.use_qt_dataset:
         return _stack_from_qt_test(noise_version=args.qt_noise_version)
     if args.input_path is None:
-        raise ValueError("未启用 --use-qt-dataset 时，必须提供 --input-path")
+        raise ValueError("未启用内置数据集时，必须提供 --input-path")
     return load_multimodal_arrays(args.input_path)
 
 
@@ -191,6 +219,8 @@ def main() -> int:
     cfg = load_config(Path(args.config) if args.config else None)
     if args.device is not None:
         cfg["runtime"]["device"] = args.device
+    if args.use_bidmc_dataset and args.input_path is not None:
+        cfg["bidmc"]["path"]["bidmc_root"] = args.input_path
 
     logger = build_logger("evaluate")
     device = resolve_device(cfg["runtime"]["device"])
@@ -203,16 +233,16 @@ def main() -> int:
         raise FileNotFoundError(f"checkpoint 不存在: {ckpt_path}")
 
     if args.mode == "ppg":
-        raise ValueError("当前 evaluate.py 参照 DeScoD-ECG，仅支持含 ECG 输出的 ecg/joint 模式")
+        raise ValueError("当前 evaluate.py 仅支持含 ECG 输出的 ecg/joint 模式")
 
     model = DDPM(base_model=None, config=cfg, device=device).to(device)
     model.load_state_dict(_load_checkpoint_state(ckpt_path, device))
     model.eval()
     logger.info("加载 checkpoint: %s", ckpt_path)
 
-    if args.input_path is None and cfg["path"]["eval_input_path"]:
+    if not args.use_bidmc_dataset and not args.use_qt_dataset and args.input_path is None and cfg["path"]["eval_input_path"]:
         args.input_path = cfg["path"]["eval_input_path"]
-    arrays = _load_eval_arrays(args)
+    arrays = _load_eval_arrays(args, cfg)
     if args.max_samples > 0:
         arrays = {key: value[: args.max_samples] for key, value in arrays.items()}
 
@@ -252,7 +282,7 @@ def main() -> int:
     denoised_ecg = np.concatenate(denoised_chunks, axis=0) if denoised_chunks else np.empty_like(clean_ecg)
     metric_arrays = compute_ecg_metric_arrays(clean_ecg=clean_ecg, noisy_ecg=noisy_ecg, denoised_ecg=denoised_ecg)
     metric_summary = summarize_metric_arrays(metric_arrays)
-    logger.info("ECG 评估结果（mean±std）: %s", metric_summary)
+    logger.info("ECG 评估结果(mean±std): %s", metric_summary)
 
     payload: dict[str, object] = {
         "mode": args.mode,

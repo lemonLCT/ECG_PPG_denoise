@@ -15,7 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from config import load_config
-from dataset import build_qt_train_val_datasets, build_train_val_datasets
+from dataset import build_bidmc_train_val_datasets, build_qt_train_val_datasets, build_train_val_datasets
 from models import DDPM
 from trainers import TrainEngine
 from utils.common import (
@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--max-steps-per-epoch", type=int, default=None)
     parser.add_argument("--resume", type=str, default=None, help="继续训练的 checkpoint 路径")
+    parser.add_argument("--use-bidmc-dataset", action="store_true", help="启用 BIDMC 双模态数据集")
     parser.add_argument("--use-qt-dataset", action="store_true", help="启用 QT Data_Preparation 适配数据集")
     parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本")
     return parser.parse_args()
@@ -70,6 +71,8 @@ def apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
     if args.dataset_path is not None:
         cfg["path"]["dataset_path"] = args.dataset_path
         cfg["data"]["data_path"] = args.dataset_path
+        if "bidmc" in cfg and "path" in cfg["bidmc"]:
+            cfg["bidmc"]["path"]["bidmc_root"] = args.dataset_path
     elif cfg["path"].get("dataset_path"):
         cfg["data"]["data_path"] = cfg["path"]["dataset_path"]
     if args.epochs is not None:
@@ -92,6 +95,30 @@ def build_data_namespace(cfg: dict) -> SimpleNamespace:
         window_length=int(cfg["data"]["window_length"]),
         window_stride=int(cfg["data"]["window_stride"]),
         synthetic_num_samples=int(cfg["data"]["synthetic_num_samples"]),
+    )
+
+
+def build_datasets(cfg: dict, args: argparse.Namespace):
+    if args.use_bidmc_dataset and args.use_qt_dataset:
+        raise ValueError("BIDMC 与 QT 数据集开关不能同时启用")
+
+    if args.use_bidmc_dataset:
+        split_seed = int(cfg["bidmc"]["data"]["split_seed"])
+        return build_bidmc_train_val_datasets(config=cfg, split_seed=split_seed)
+
+    if args.use_qt_dataset:
+        return build_qt_train_val_datasets(
+            noise_version=args.qt_noise_version,
+            val_ratio=float(cfg["data"]["val_ratio"]),
+            seed=int(cfg["runtime"]["seed"]),
+        )
+
+    data_cfg = build_data_namespace(cfg)
+    return build_train_val_datasets(
+        data_cfg,
+        seed=int(cfg["runtime"]["seed"]),
+        use_qt_dataset=False,
+        qt_noise_version=args.qt_noise_version,
     )
 
 
@@ -118,20 +145,7 @@ def main() -> int:
     logger.info("设备: %s | 阶段: %s", device, cfg["train"]["stage_name"])
     logger.info("输出目录: %s", output_dir)
 
-    data_cfg = build_data_namespace(cfg)
-    if args.use_qt_dataset:
-        train_ds, val_ds = build_qt_train_val_datasets(
-            noise_version=args.qt_noise_version,
-            val_ratio=float(cfg["data"]["val_ratio"]),
-            seed=int(cfg["runtime"]["seed"]),
-        )
-    else:
-        train_ds, val_ds = build_train_val_datasets(
-            data_cfg,
-            seed=int(cfg["runtime"]["seed"]),
-            use_qt_dataset=False,
-            qt_noise_version=args.qt_noise_version,
-        )
+    train_ds, val_ds = build_datasets(cfg, args)
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg["train"]["batch_size"]),
@@ -201,7 +215,9 @@ def main() -> int:
         )
         global_step += max_steps_per_epoch
         scheduler.step()
-        logger.info("当前学习率: %.8f", float(optimizer.param_groups[0]["lr"]))
+        logger.info("当前学习率 %.8f", float(optimizer.param_groups[0]["lr"]))
+        logger.info("train_metrics=%s", train_metrics)
+        logger.info("val_metrics=%s", val_metrics)
 
         latest_path = ckpt_dir / "latest.pt"
         save_checkpoint(

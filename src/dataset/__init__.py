@@ -1,3 +1,4 @@
+from .bidmc_dataset import BIDMCDataset, build_bidmc_test_dataset, build_bidmc_train_val_datasets, build_bidmc_train_val_test_datasets
 from .QTdataset import (
     QTDataset,
     build_qt_test_dataset,
@@ -12,7 +13,11 @@ from .multimodal_dataset import MultimodalSignalDataset, SyntheticMultimodalData
 __all__ = [
     "MultimodalSignalDataset",
     "SyntheticMultimodalDataset",
+    "BIDMCDataset",
     "QTDataset",
+    "build_bidmc_train_val_test_datasets",
+    "build_bidmc_train_val_datasets",
+    "build_bidmc_test_dataset",
     "unpack_qt_return",
     "split_qt_train_val_arrays",
     "build_qt_train_val_datasets",

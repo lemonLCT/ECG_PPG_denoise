@@ -9,7 +9,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "src" / "config" / "base.yaml"
-REQUIRED_TOP_LEVEL_KEYS = ("runtime", "data", "path", "loss", "model", "train")
+REQUIRED_TOP_LEVEL_KEYS = ("runtime", "data", "path", "bidmc", "loss", "model", "train")
 REQUIRED_MODEL_KEYS = ("main_model", "ecg_encoder", "ppg_encoder", "conditional_model", "diffusion")
 
 
@@ -29,6 +29,92 @@ def _require_positive_float(value: Any, dotted_name: str) -> float:
     if not isinstance(value, (int, float)) or float(value) <= 0.0:
         raise ValueError(f"`{dotted_name}` 必须是正数，实际为 {value!r}")
     return float(value)
+
+
+def _require_ratio(value: Any, dotted_name: str) -> float:
+    if not isinstance(value, (int, float)) or not 0.0 < float(value) < 1.0:
+        raise ValueError(f"`{dotted_name}` 必须在 (0, 1) 内，实际为 {value!r}")
+    return float(value)
+
+
+def _require_vector(value: Any, expected_len: int, dotted_name: str) -> list[Any]:
+    if not isinstance(value, list) or len(value) != expected_len:
+        raise ValueError(f"`{dotted_name}` 必须是长度为 {expected_len} 的列表")
+    return value
+
+
+def _validate_bidmc_config(payload: dict[str, Any]) -> None:
+    bidmc_cfg = payload["bidmc"]
+    if not isinstance(bidmc_cfg.get("path"), dict):
+        raise ValueError("`bidmc.path` 必须为 dict")
+    if not isinstance(bidmc_cfg.get("data"), dict):
+        raise ValueError("`bidmc.data` 必须为 dict")
+
+    bidmc_path_cfg = bidmc_cfg["path"]
+    bidmc_data_cfg = bidmc_cfg["data"]
+
+    bidmc_root = bidmc_path_cfg.get("bidmc_root", "")
+    if not isinstance(bidmc_root, str) or not bidmc_root.strip():
+        raise ValueError("`bidmc.path.bidmc_root` 必须是非空字符串")
+
+    _require_positive_int(int(bidmc_data_cfg.get("window_length", 0)), "bidmc.data.window_length")
+    _require_positive_int(int(bidmc_data_cfg.get("window_stride", 0)), "bidmc.data.window_stride")
+    _require_positive_float(bidmc_data_cfg.get("sampling_rate_hz", 0.0), "bidmc.data.sampling_rate_hz")
+    _require_non_negative_int(int(bidmc_data_cfg.get("split_seed", 0)), "bidmc.data.split_seed")
+
+    train_ratio = _require_ratio(bidmc_data_cfg.get("train_ratio", 0.0), "bidmc.data.train_ratio")
+    val_ratio = _require_ratio(bidmc_data_cfg.get("val_ratio", 0.0), "bidmc.data.val_ratio")
+    test_ratio = _require_ratio(bidmc_data_cfg.get("test_ratio", 0.0), "bidmc.data.test_ratio")
+    if abs((train_ratio + val_ratio + test_ratio) - 1.0) > 1e-6:
+        raise ValueError("`bidmc.data.train_ratio + val_ratio + test_ratio` 必须等于 1")
+
+    normalization = bidmc_data_cfg.get("normalization", "")
+    if normalization != "window_minmax":
+        raise ValueError("`bidmc.data.normalization` 当前仅支持 `window_minmax`")
+
+    for key in ("ecg_channel_name", "ppg_channel_name"):
+        value = bidmc_data_cfg.get(key, "")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"`bidmc.data.{key}` 必须是非空字符串")
+
+    ecg_noise_version = int(bidmc_data_cfg.get("ecg_noise_version", 0))
+    _require_positive_int(ecg_noise_version, "bidmc.data.ecg_noise_version")
+    if ecg_noise_version not in {1, 2}:
+        raise ValueError("`bidmc.data.ecg_noise_version` 只能是 1 或 2")
+
+    for key in ("ecg_noise_ratio_range", "ppg_noise_ratio_range"):
+        low, high = _require_vector(bidmc_data_cfg.get(key, []), 2, f"bidmc.data.{key}")
+        low_f = _require_positive_float(low, f"bidmc.data.{key}[0]")
+        high_f = _require_positive_float(high, f"bidmc.data.{key}[1]")
+        if high_f <= low_f:
+            raise ValueError(f"`bidmc.data.{key}` 要求 high > low")
+
+    _require_non_negative_int(int(bidmc_data_cfg.get("bidmc_ppg_noise_seed", 0)), "bidmc.data.bidmc_ppg_noise_seed")
+    artifact_param_path = bidmc_data_cfg.get("ppg_noise_artifact_param_path", "")
+    if not isinstance(artifact_param_path, str):
+        raise ValueError("`bidmc.data.ppg_noise_artifact_param_path` 必须是字符串")
+
+    artifact_types = [int(v) for v in _require_vector(bidmc_data_cfg.get("ppg_noise_artifact_types", []), 4, "bidmc.data.ppg_noise_artifact_types")]
+    if any(v not in {0, 1} for v in artifact_types) or sum(artifact_types) == 0:
+        raise ValueError("`bidmc.data.ppg_noise_artifact_types` 必须由 0/1 构成，且至少启用一种伪影")
+
+    for key, expected_len in (
+        ("ppg_noise_dur_mu", 5),
+        ("ppg_noise_rms_shape", 4),
+        ("ppg_noise_rms_scale", 4),
+        ("ppg_noise_slope_mean", 4),
+        ("ppg_noise_slope_std", 4),
+    ):
+        values = _require_vector(bidmc_data_cfg.get(key, []), expected_len, f"bidmc.data.{key}")
+        for idx, value in enumerate(values):
+            if key == "ppg_noise_slope_std":
+                if not isinstance(value, (int, float)) or float(value) < 0.0:
+                    raise ValueError(f"`bidmc.data.{key}[{idx}]` 必须是非负数")
+            elif key == "ppg_noise_slope_mean":
+                if not isinstance(value, (int, float)):
+                    raise ValueError(f"`bidmc.data.{key}[{idx}]` 必须是数值")
+            else:
+                _require_positive_float(value, f"bidmc.data.{key}[{idx}]")
 
 
 def _validate_config(payload: dict[str, Any]) -> None:
@@ -63,6 +149,8 @@ def _validate_config(payload: dict[str, Any]) -> None:
         value = path_cfg.get(key, "")
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"`path.{key}` 必须是非空字符串")
+
+    _validate_bidmc_config(payload)
 
     for name in ("ecg_encoder", "ppg_encoder"):
         encoder_cfg = model_cfg[name]
