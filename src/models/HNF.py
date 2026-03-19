@@ -152,6 +152,109 @@ class ConditionalModel(nn.Module):
         return self.conv_out(cond)
 
 
+class multiConditionModel(nn.Module):
+    def __init__(self, feats=80):
+        super(multiConditionModel, self).__init__()
+
+        self.ecg_embed = PositionalEncoding(feats)
+        self.ecg_x_in = nn.Sequential(
+            Conv1d(1, feats, 9, padding=4, padding_mode='reflect'),
+            nn.LeakyReLU(0.2),
+        )
+        self.ecg_x_blocks = nn.ModuleList([
+            HNFBlock(feats, feats, 1),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 4),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 1),
+        ])
+        self.ecg_bridge = nn.ModuleList([
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+        ])
+        self.ecg_cond_in = nn.Sequential(
+            Conv1d(1, feats, 9, padding=4, padding_mode='reflect'),
+            nn.LeakyReLU(0.2),
+        )
+        self.ecg_cond_blocks = nn.ModuleList([
+            HNFBlock(feats, feats, 1),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 4),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 1),
+        ])
+        self.ecg_out = Conv1d(feats, 1, 9, padding=4, padding_mode='reflect')
+
+        self.ppg_embed = PositionalEncoding(feats)
+        self.ppg_x_in = nn.Sequential(
+            Conv1d(1, feats, 9, padding=4, padding_mode='reflect'),
+            nn.LeakyReLU(0.2),
+        )
+        self.ppg_x_blocks = nn.ModuleList([
+            HNFBlock(feats, feats, 1),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 4),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 1),
+        ])
+        self.ppg_bridge = nn.ModuleList([
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+            Bridge(feats, feats),
+        ])
+        self.ppg_cond_in = nn.Sequential(
+            Conv1d(1, feats, 9, padding=4, padding_mode='reflect'),
+            nn.LeakyReLU(0.2),
+        )
+        self.ppg_cond_blocks = nn.ModuleList([
+            HNFBlock(feats, feats, 1),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 4),
+            HNFBlock(feats, feats, 2),
+            HNFBlock(feats, feats, 1),
+        ])
+        self.ppg_out = Conv1d(feats, 1, 9, padding=4, padding_mode='reflect')
+
+    def forward(self, x_t_ecg, cond_ecg, x_t_ppg, cond_ppg, noise_scale):
+        if x_t_ecg.ndim != 3 or cond_ecg.ndim != 3 or x_t_ppg.ndim != 3 or cond_ppg.ndim != 3:
+            raise ValueError("x_t_ecg、cond_ecg、x_t_ppg、cond_ppg 都必须是 [B, 1, T] 张量。")
+        if x_t_ecg.shape != cond_ecg.shape:
+            raise ValueError(f"ECG 的 x_t 和 cond 形状必须一致，当前为 {tuple(x_t_ecg.shape)} 与 {tuple(cond_ecg.shape)}")
+        if x_t_ppg.shape != cond_ppg.shape:
+            raise ValueError(f"PPG 的 x_t 和 cond 形状必须一致，当前为 {tuple(x_t_ppg.shape)} 与 {tuple(cond_ppg.shape)}")
+
+        ecg_noise_embed = self.ecg_embed(noise_scale)
+        ecg_x = self.ecg_x_in(x_t_ecg)
+        ecg_skips = []
+        for layer, bridge in zip(self.ecg_x_blocks, self.ecg_bridge):
+            ecg_x = layer(ecg_x)
+            ecg_skips.append(bridge(ecg_x, ecg_noise_embed))
+
+        ecg_cond = self.ecg_cond_in(cond_ecg)
+        for skip, layer in zip(ecg_skips, self.ecg_cond_blocks):
+            ecg_cond = layer(ecg_cond) + skip
+        pred_noise_ecg = self.ecg_out(ecg_cond)
+
+        ppg_noise_embed = self.ppg_embed(noise_scale)
+        ppg_x = self.ppg_x_in(x_t_ppg)
+        ppg_skips = []
+        for layer, bridge in zip(self.ppg_x_blocks, self.ppg_bridge):
+            ppg_x = layer(ppg_x)
+            ppg_skips.append(bridge(ppg_x, ppg_noise_embed))
+
+        ppg_cond = self.ppg_cond_in(cond_ppg)
+        for skip, layer in zip(ppg_skips, self.ppg_cond_blocks):
+            ppg_cond = layer(ppg_cond) + skip
+        pred_noise_ppg = self.ppg_out(ppg_cond)
+
+        return pred_noise_ecg, pred_noise_ppg
+
+
 if __name__ == "__main__":
     net = ConditionalModel(80)
     # leaf = frontend.Leaf(sample_rate=400, n_filters=128, window_len=65, window_stride=40).cuda()

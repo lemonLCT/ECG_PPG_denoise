@@ -116,9 +116,11 @@ class SignalEncoder(nn.Module):
         # Concatenate all outputs along the channel dimension
         concatenated_output = torch.cat(outputs, dim=1)  # Shape: (B, 6*N, L)
 
-        # Apply the final 1x1 convolution
-        # transformed_output = self.final_transform1(concatenated_output)  # Shape: (B, N, L)
-        # transformed_output = F.silu(transformed_output)
-        # transformed_output = self.final_transform2(transformed_output)  # Shape: (B, N, L)
+
 
         return concatenated_output
+if __name__ == "__main__":
+    net = SignalEncoder()
+    x = torch.randn((1, 1, 512))
+    y = net(x)
+    print(y.shape)
