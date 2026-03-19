@@ -10,7 +10,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "src" / "config" / "base.yaml"
 REQUIRED_TOP_LEVEL_KEYS = ("runtime", "data", "path", "bidmc", "loss", "model", "train")
-REQUIRED_MODEL_KEYS = ("main_model", "ecg_encoder", "ppg_encoder", "conditional_model", "diffusion")
+REQUIRED_MODEL_KEYS = ("main_model", "ecg_encoder", "ppg_encoder", "conditional_model", "hnf", "diffusion")
 
 
 def _require_positive_int(value: Any, dotted_name: str) -> int:
@@ -171,6 +171,39 @@ def _validate_config(payload: dict[str, Any]) -> None:
     _require_positive_int(int(conditional_cfg.get("joint_channels", 0)), "model.conditional_model.joint_channels")
     _require_positive_int(int(conditional_cfg.get("base_channels", 0)), "model.conditional_model.base_channels")
     _require_positive_int(int(conditional_cfg.get("gn_groups", 0)), "model.conditional_model.gn_groups")
+
+    hnf_cfg = model_cfg["hnf"]
+    _require_positive_int(int(hnf_cfg.get("feats", 0)), "model.hnf.feats")
+    _require_positive_int(int(hnf_cfg.get("input_channels", 0)), "model.hnf.input_channels")
+    _require_positive_int(int(hnf_cfg.get("output_channels", 0)), "model.hnf.output_channels")
+    _require_positive_int(int(hnf_cfg.get("input_kernel_size", 0)), "model.hnf.input_kernel_size")
+    _require_positive_int(int(hnf_cfg.get("output_kernel_size", 0)), "model.hnf.output_kernel_size")
+    _require_positive_int(int(hnf_cfg.get("bridge_kernel_size", 0)), "model.hnf.bridge_kernel_size")
+
+    for key in ("input_kernel_size", "output_kernel_size", "bridge_kernel_size"):
+        value = int(hnf_cfg.get(key, 0))
+        if value % 2 == 0:
+            raise ValueError(f"`model.hnf.{key}` 必须为奇数，实际为 {value}")
+
+    block_kernel_sizes = hnf_cfg.get("block_kernel_sizes", [])
+    if not isinstance(block_kernel_sizes, list) or len(block_kernel_sizes) != 4:
+        raise ValueError("`model.hnf.block_kernel_sizes` 必须是长度为 4 的列表")
+    for idx, kernel in enumerate(block_kernel_sizes):
+        kernel_value = _require_positive_int(int(kernel), f"model.hnf.block_kernel_sizes[{idx}]")
+        if kernel_value % 2 == 0:
+            raise ValueError(f"`model.hnf.block_kernel_sizes[{idx}]` 必须为奇数，实际为 {kernel_value}")
+
+    dilations = hnf_cfg.get("dilations", [])
+    if not isinstance(dilations, list) or not dilations:
+        raise ValueError("`model.hnf.dilations` 必须是非空列表")
+    for idx, dilation in enumerate(dilations):
+        _require_positive_int(int(dilation), f"model.hnf.dilations[{idx}]")
+
+    negative_slope = hnf_cfg.get("negative_slope", 0.0)
+    if not isinstance(negative_slope, (int, float)) or float(negative_slope) <= 0.0:
+        raise ValueError("`model.hnf.negative_slope` 必须为正数")
+    if not isinstance(hnf_cfg.get("use_affine_level"), bool):
+        raise ValueError("`model.hnf.use_affine_level` 必须是 bool")
 
     diffusion_cfg = model_cfg["diffusion"]
     _require_positive_int(int(diffusion_cfg.get("num_steps", 0)), "model.diffusion.num_steps")

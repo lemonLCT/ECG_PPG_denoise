@@ -109,9 +109,11 @@ class DDPM(nn.Module):
         输出:
         - `noisy_feat_ecg/noisy_feat_ppg:[B,C,T]`
         """
+        ecg_mask = modality_mask[0].view(1, 1, 1)
+        ppg_mask = modality_mask[1].view(1, 1, 1)
         return {
-            "noisy_feat_ecg": self.noisy_ecg_encoder(noisy_ecg, modality_mask[0]),
-            "noisy_feat_ppg": self.noisy_ppg_encoder(noisy_ppg, modality_mask[1]),
+            "noisy_feat_ecg": self.noisy_ecg_encoder(noisy_ecg) * ecg_mask,
+            "noisy_feat_ppg": self.noisy_ppg_encoder(noisy_ppg) * ppg_mask,
         }
 
     def _build_diffusion_targets(self, clean_ecg: Tensor, clean_ppg: Tensor) -> Dict[str, Tensor]:

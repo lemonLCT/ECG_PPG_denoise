@@ -78,6 +78,17 @@ model:
     joint_channels: 256
     base_channels: 64
     gn_groups: 8
+  hnf:
+    feats: 64
+    input_channels: 1
+    output_channels: 1
+    input_kernel_size: 9
+    output_kernel_size: 9
+    bridge_kernel_size: 3
+    block_kernel_sizes: [3, 5, 9, 15]
+    dilations: [1, 2, 4, 2, 1]
+    negative_slope: 0.2
+    use_affine_level: true
   diffusion:
     num_steps: 200
     beta_start: 0.0001

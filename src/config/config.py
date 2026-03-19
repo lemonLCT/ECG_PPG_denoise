@@ -102,6 +102,20 @@ class QualityAssessorConfig:
 
 
 @dataclass
+class HNFConfig:
+    feats: int = 64
+    input_channels: int = 1
+    output_channels: int = 1
+    input_kernel_size: int = 9
+    output_kernel_size: int = 9
+    bridge_kernel_size: int = 3
+    block_kernel_sizes: list[int] = field(default_factory=lambda: [3, 5, 9, 15])
+    dilations: list[int] = field(default_factory=lambda: [1, 2, 4, 2, 1])
+    negative_slope: float = 0.2
+    use_affine_level: bool = True
+
+
+@dataclass
 class ModelConfig:
     name: str = "modality_flexible_conditional_diffusion"
     signal_length: int = 512
@@ -115,6 +129,7 @@ class ModelConfig:
     ecg_encoder: SingleEncoderConfig = field(default_factory=SingleEncoderConfig)
     ppg_encoder: SingleEncoderConfig = field(default_factory=SingleEncoderConfig)
     quality_assessor: QualityAssessorConfig = field(default_factory=QualityAssessorConfig)
+    hnf: HNFConfig = field(default_factory=HNFConfig)
 
 
 @dataclass
@@ -219,11 +234,13 @@ class ExperimentConfig:
         ecg_encoder = SingleEncoderConfig(**model_payload.pop("ecg_encoder", {}))
         ppg_encoder = SingleEncoderConfig(**model_payload.pop("ppg_encoder", {}))
         quality_assessor = QualityAssessorConfig(**model_payload.pop("quality_assessor", {}))
+        hnf = HNFConfig(**model_payload.pop("hnf", {}))
         model = ModelConfig(
             **model_payload,
             ecg_encoder=ecg_encoder,
             ppg_encoder=ppg_encoder,
             quality_assessor=quality_assessor,
+            hnf=hnf,
         )
 
         loss = LossConfig(**payload.get("loss", {}))

@@ -62,7 +62,8 @@ env/
 # =========================
 outputs/
 logs/
-tests/
+tests/*
+!tests/test_hnf.py
 # 默认忽略源码包下的本地数据集，仅放行 Python 源文件和占位文件
 
 !src/ecg_ppg_denoise/data/*.py

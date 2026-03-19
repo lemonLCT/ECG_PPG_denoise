@@ -28,9 +28,10 @@ class ConvNormGELU(nn.Module):
 class SingleEncoder1D(nn.Module):
     """
     ECG/PPG 单模态编码器。
+
     输入:
     - `signal:[B,1,T]`
-    - `mask:[B]` 或标量，`0` 表示该模态缺失
+
     输出:
     - `encoded:[B,C,T]`
     """
@@ -73,32 +74,51 @@ class SingleEncoder1D(nn.Module):
             self.projection = nn.Identity()
             self.out_channels = self.concat_channels
 
-    @staticmethod
-    # 编码器不需要 掩码
-    # def _prepare_mask(mask: Tensor | float | int, batch_size: int, device: torch.device, dtype: torch.dtype) -> Tensor:
-    #     mask_tensor = torch.as_tensor(mask, device=device, dtype=dtype)
-    #     if mask_tensor.ndim == 0:
-    #         mask_tensor = mask_tensor.repeat(batch_size)
-    #     elif mask_tensor.ndim == 2 and mask_tensor.shape[-1] == 1:
-    #         mask_tensor = mask_tensor.view(batch_size)
-    #     elif mask_tensor.ndim != 1:
-    #         raise ValueError(f"encoder mask 期望标量或 [B]，实际为 {tuple(mask_tensor.shape)}")
-    #     if mask_tensor.shape[0] != batch_size:
-    #         raise ValueError(f"encoder mask batch 大小不匹配，期望 {batch_size}，实际为 {mask_tensor.shape[0]}")
-    #     return mask_tensor.view(batch_size, 1, 1)
-
-    def forward(self, signal: Tensor, mask: Tensor | float | int) -> Tensor:
+    def forward(self, signal: Tensor) -> Tensor:
         """
         输入:
         - `signal:[B,1,T]`
-        - `mask:[B]` 或标量
+
         输出:
         - `encoded:[B,C,T]`
         """
         if signal.ndim != 3:
             raise ValueError(f"signal 期望 [B,1,T]，实际为 {tuple(signal.shape)}")
-        # mask_tensor = self._prepare_mask(mask, batch_size=signal.shape[0], device=signal.device, dtype=signal.dtype)
+
         branch_outputs = [branch(signal) for branch in self.branches]
+
         features = torch.cat(branch_outputs, dim=1)
-        encoded = self.projection(features)
-        return encoded # * mask_tensor
+        # 维度投射
+        features = self.projection(features)
+        return features
+
+
+class SignalEncoder(nn.Module):
+    def __init__(self, in_channels=1, out_channels=80, kernel_sizes=[1, 3, 7, 11]):
+        super().__init__()
+        # Store the number of output channels per convolution
+        self.N = out_channels
+
+        # Create multiple convolutional layers with different kernel sizes
+        self.conv_layers = nn.ModuleList([
+            nn.Conv1d(in_channels, 20, kernel_size=ks, padding=ks // 2)
+            for ks in kernel_sizes
+        ])
+
+        # Initialize weights using kaiming normal initialization
+        for layer in self.conv_layers:
+            nn.init.kaiming_normal_(layer.weight)
+
+    def forward(self, x):
+        # Apply all convolution layers and collect their outputs
+        outputs = [conv(x) for conv in self.conv_layers]
+
+        # Concatenate all outputs along the channel dimension
+        concatenated_output = torch.cat(outputs, dim=1)  # Shape: (B, 6*N, L)
+
+        # Apply the final 1x1 convolution
+        # transformed_output = self.final_transform1(concatenated_output)  # Shape: (B, N, L)
+        # transformed_output = F.silu(transformed_output)
+        # transformed_output = self.final_transform2(transformed_output)  # Shape: (B, N, L)
+
+        return concatenated_output

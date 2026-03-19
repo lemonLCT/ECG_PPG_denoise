@@ -18,6 +18,10 @@ def test_default_encoder_and_loss_settings() -> None:
     assert cfg["model"]["ecg_encoder"]["use_projection"] is False
     assert cfg["model"]["ppg_encoder"]["branch_channels"] == 16
     assert cfg["model"]["conditional_model"]["cond_channels"] == 96
+    assert cfg["model"]["hnf"]["feats"] == 64
+    assert cfg["model"]["hnf"]["block_kernel_sizes"] == [3, 5, 9, 15]
+    assert cfg["model"]["hnf"]["dilations"] == [1, 2, 4, 2, 1]
+    assert cfg["model"]["hnf"]["use_affine_level"] is True
     assert cfg["loss"]["diffusion_weight"] == 1.0
     assert cfg["loss"]["derivative_weight"] == 0.0
     assert cfg["bidmc"]["data"]["window_length"] == 500
