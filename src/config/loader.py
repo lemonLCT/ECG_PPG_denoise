@@ -141,7 +141,7 @@ def _validate_config(payload: dict[str, Any]) -> None:
     if not isinstance(val_ratio, (int, float)) or not 0.0 <= float(val_ratio) < 1.0:
         raise ValueError(f"`data.val_ratio` 必须在 [0, 1) 内，实际为 {val_ratio!r}")
 
-    for key in ("dataset_path", "checkpoint_path", "infer_input_path", "eval_input_path"):
+    for key in ("dataset_path", "qt_root", "ppg_fieldstudy_pickle_path", "artifact_param_path", "checkpoint_path", "infer_input_path", "eval_input_path"):
         value = path_cfg.get(key, "")
         if not isinstance(value, str):
             raise ValueError(f"`path.{key}` 必须是字符串")

@@ -12,6 +12,13 @@ import numpy as np
 from scipy import signal
 from scipy.io import loadmat
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from config import load_config
+
 DEFAULT_ARTIFACT_PARAM_PATH = Path(r"D:\Code\data\数据处理脚本\artifact_param.mat")
 DEFAULT_OUTPUT_DIR = Path("artifacts") / "ppg_noise"
 DEFAULT_PRESET_NAME = "demo"
@@ -83,10 +90,17 @@ class ArtifactParamBundle:
     slope_std: tuple[float, float, float, float]
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _resolve_default_artifact_param_path(config_path: str | Path | None) -> Path:
+    cfg = load_config(Path(config_path) if config_path else None)
+    configured = str(cfg["path"].get("artifact_param_path", "")).strip()
+    return Path(configured).expanduser() if configured else DEFAULT_ARTIFACT_PARAM_PATH
+
+
+def build_parser(default_artifact_param_path: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="使用纯 Python 复现 gen_PPG_artifacts.m 的逻辑，生成 PPG 伪影并导出为 CSV、SVG 和 JSON。"
     )
+    parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument(
         "--duration-samples",
         type=int,
@@ -102,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--artifact-param",
         type=Path,
-        default=DEFAULT_ARTIFACT_PARAM_PATH,
+        default=default_artifact_param_path,
         help="artifact_param.mat 路径；默认读取 D:\\Code\\data\\数据处理脚本\\artifact_param.mat。",
     )
     parser.add_argument(
@@ -632,7 +646,11 @@ def main() -> int:
         sys.stderr.reconfigure(errors="backslashreplace")
 
     try:
-        args = build_parser().parse_args()
+        pre_parser = argparse.ArgumentParser(add_help=False)
+        pre_parser.add_argument("--config", type=str, default=None)
+        pre_args, _ = pre_parser.parse_known_args()
+        default_artifact_param_path = _resolve_default_artifact_param_path(pre_args.config)
+        args = build_parser(default_artifact_param_path=default_artifact_param_path).parse_args()
         config = build_generation_config(args)
         artifacts = generate_ppg_noise(config)
         print(f"CSV 已生成: {artifacts.csv_path}")

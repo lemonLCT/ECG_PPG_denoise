@@ -7,6 +7,13 @@ import pprint
 import sys
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from config import load_config
+
 DEFAULT_PICKLE_PATH = Path(r"D:\Code\data\PPG_FieldStudy\S1\S1.pkl")
 FALLBACK_ENCODINGS = ("latin1", "bytes")
 
@@ -18,12 +25,19 @@ def configure_output_streams() -> None:
             stream.reconfigure(errors="backslashreplace")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _resolve_default_pickle_path(config_path: str | Path | None) -> Path:
+    cfg = load_config(Path(config_path) if config_path else None)
+    configured = str(cfg["path"].get("ppg_fieldstudy_pickle_path", "")).strip()
+    return Path(configured).expanduser() if configured else DEFAULT_PICKLE_PATH
+
+
+def build_parser(default_pickle_path: Path) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="读取 pickle 文件并输出内容")
+    parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument(
         "--path",
         type=Path,
-        default=DEFAULT_PICKLE_PATH,
+        default=default_pickle_path,
         help="待读取的 pickle 文件路径，默认读取 S1.pkl",
     )
     parser.add_argument(
@@ -121,7 +135,11 @@ def load_pickle_file(path: Path) -> tuple[Any, str]:
 
 def main() -> int:
     configure_output_streams()
-    args = build_parser().parse_args()
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None)
+    pre_args, _ = pre_parser.parse_known_args()
+    default_pickle_path = _resolve_default_pickle_path(pre_args.config)
+    args = build_parser(default_pickle_path=default_pickle_path).parse_args()
     path = args.path.expanduser().resolve()
 
     try:

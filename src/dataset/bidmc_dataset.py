@@ -34,6 +34,25 @@ def _is_waveform_record(path: Path) -> bool:
     return stem.startswith("bidmc") and not stem.endswith("n")
 
 
+def _normalize_channel_name(name: str) -> str:
+    return "".join(str(name).strip().upper().split())
+
+
+def _resolve_channel_index(signal_names: Sequence[str], preferred_name: str, fallback_names: Sequence[str] = ()) -> int | None:
+    normalized_signal_names = [_normalize_channel_name(name) for name in signal_names]
+    candidates = [_normalize_channel_name(preferred_name), *[_normalize_channel_name(name) for name in fallback_names]]
+
+    for candidate in candidates:
+        if candidate in normalized_signal_names:
+            return normalized_signal_names.index(candidate)
+
+    for candidate in candidates:
+        for index, normalized_name in enumerate(normalized_signal_names):
+            if normalized_name.endswith(candidate) or candidate in normalized_name:
+                return index
+    return None
+
+
 def _load_ppg_noise_module():
     module_name = "project_ppg_noise_generate_runtime"
     cached = sys.modules.get(module_name)
@@ -60,6 +79,19 @@ def _resolve_bidmc_root(config: dict[str, Any]) -> Path:
     root = Path(bidmc_cfg["path"]["bidmc_root"]).expanduser().resolve()
     if not root.exists():
         raise FileNotFoundError(f"BIDMC 数据目录不存在: {root}")
+    return root
+
+
+def _resolve_nstdb_root(config: dict[str, Any]) -> Path:
+    bidmc_cfg = _require_bidmc_dict(config)
+    configured_root = str(bidmc_cfg.get("path", {}).get("nstdb_root", "")).strip()
+    root = Path(configured_root).expanduser().resolve() if configured_root else NSTDB_ROOT
+    if not root.exists():
+        raise FileNotFoundError(
+            "未找到 NSTDB 根目录: "
+            f"{root}。BIDMC 数据集构造默认需要 MIT-BIH Noise Stress Test Database 作为 ECG 噪声源，"
+            "请下载后放到该目录，或在 `bidmc.path.nstdb_root` 中显式配置路径。"
+        )
     return root
 
 
@@ -159,10 +191,13 @@ def _scale_noise_window(clean_window: np.ndarray, noise_window: np.ndarray, rati
     return (noise_window * alpha).astype(np.float32)
 
 
-def _load_bw_noise_pools(noise_version: int) -> tuple[np.ndarray, np.ndarray]:
-    if not NSTDB_ROOT.exists():
-        raise FileNotFoundError(f"未找到 NSTDB 根目录: {NSTDB_ROOT}")
-    bw_signals, _ = wfdb.rdsamp(str(NSTDB_ROOT / "bw"))
+def _load_bw_noise_pools(noise_version: int, nstdb_root: Path) -> tuple[np.ndarray, np.ndarray]:
+    if not (nstdb_root / "bw.hea").exists():
+        raise FileNotFoundError(
+            "未找到 NSTDB 的 `bw` 记录文件，期望目录为: "
+            f"{nstdb_root}。请确认目录下至少包含 `bw.hea` 和 `bw.dat`。"
+        )
+    bw_signals, _ = wfdb.rdsamp(str(nstdb_root / "bw"))
     bw_signals = np.asarray(bw_signals, dtype=np.float32)
     halfway = bw_signals.shape[0] // 2
     bw_noise_channel1_a = bw_signals[:halfway, 0]
@@ -265,7 +300,10 @@ def _build_dataset_for_records(record_ids: Sequence[str], root: Path, bidmc_data
     expected_fs = float(bidmc_data_cfg["sampling_rate_hz"])
     ecg_channel_name = str(bidmc_data_cfg["ecg_channel_name"])
     ppg_channel_name = str(bidmc_data_cfg["ppg_channel_name"])
-    train_noise_pool, test_noise_pool = _load_bw_noise_pools(int(bidmc_data_cfg["ecg_noise_version"]))
+    ecg_fallback_names = tuple(str(name) for name in bidmc_data_cfg.get("ecg_channel_fallback_names", []))
+    ppg_fallback_names = tuple(str(name) for name in bidmc_data_cfg.get("ppg_channel_fallback_names", []))
+    nstdb_root = Path(str(bidmc_data_cfg["nstdb_root"])).expanduser().resolve()
+    train_noise_pool, test_noise_pool = _load_bw_noise_pools(int(bidmc_data_cfg["ecg_noise_version"]), nstdb_root)
     ecg_noise_pool = train_noise_pool if split_name in {"train", "val"} else test_noise_pool
 
     ecg_ratio_low, ecg_ratio_high = (float(v) for v in bidmc_data_cfg["ecg_noise_ratio_range"])
@@ -285,12 +323,20 @@ def _build_dataset_for_records(record_ids: Sequence[str], root: Path, bidmc_data
         fs = float(fields["fs"])
         if abs(fs - expected_fs) > 1e-6:
             raise ValueError(f"{record_id} 采样率为 {fs} Hz，与配置要求的 {expected_fs} Hz 不一致")
-        if ecg_channel_name not in signal_names or ppg_channel_name not in signal_names:
-            logger.warning("跳过记录 %s：缺少 %s 或 %s 通道", record_id, ecg_channel_name, ppg_channel_name)
+        ecg_index = _resolve_channel_index(signal_names, ecg_channel_name, ecg_fallback_names)
+        ppg_index = _resolve_channel_index(signal_names, ppg_channel_name, ppg_fallback_names)
+        if ecg_index is None or ppg_index is None:
+            logger.warning(
+                "跳过记录 %s：配置 ECG=%s PPG=%s，实际通道=%s",
+                record_id,
+                [ecg_channel_name, *ecg_fallback_names],
+                [ppg_channel_name, *ppg_fallback_names],
+                signal_names,
+            )
             continue
 
-        clean_ecg_full = np.asarray(signals[:, signal_names.index(ecg_channel_name)], dtype=np.float32)
-        clean_ppg_full = np.asarray(signals[:, signal_names.index(ppg_channel_name)], dtype=np.float32)
+        clean_ecg_full = np.asarray(signals[:, ecg_index], dtype=np.float32)
+        clean_ppg_full = np.asarray(signals[:, ppg_index], dtype=np.float32)
         total_length = int(min(clean_ecg_full.shape[0], clean_ppg_full.shape[0]))
         clean_ecg_full = _ensure_length(clean_ecg_full[:total_length], total_length)
         clean_ppg_full = _ensure_length(clean_ppg_full[:total_length], total_length)
@@ -344,6 +390,7 @@ def build_bidmc_train_val_test_datasets(config: dict[str, Any], split_seed: int 
     bidmc_cfg = _require_bidmc_dict(config)
     bidmc_data_cfg = dict(bidmc_cfg["data"])
     root = _resolve_bidmc_root(config)
+    bidmc_data_cfg["nstdb_root"] = str(_resolve_nstdb_root(config))
     record_ids = _list_bidmc_record_ids(root)
     effective_seed = int(bidmc_data_cfg["split_seed"] if split_seed is None else split_seed)
     train_ids, val_ids, test_ids = _split_record_ids(

@@ -40,6 +40,13 @@ def _git_sha() -> str:
         return "unknown"
 
 
+def _resolve_project_path(path_value: str | Path) -> Path:
+    candidate = Path(path_value).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="训练多模态扩散模型")
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
@@ -73,6 +80,7 @@ def apply_overrides(cfg: dict, args: argparse.Namespace) -> dict:
         cfg["data"]["data_path"] = args.dataset_path
         if "bidmc" in cfg and "path" in cfg["bidmc"]:
             cfg["bidmc"]["path"]["bidmc_root"] = args.dataset_path
+        cfg["path"]["qt_root"] = args.dataset_path
     elif cfg["path"].get("dataset_path"):
         cfg["data"]["data_path"] = cfg["path"]["dataset_path"]
     if args.epochs is not None:
@@ -111,6 +119,7 @@ def build_datasets(cfg: dict, args: argparse.Namespace):
             noise_version=args.qt_noise_version,
             val_ratio=float(cfg["data"]["val_ratio"]),
             seed=int(cfg["runtime"]["seed"]),
+            data_root=cfg["path"].get("qt_root") or None,
         )
 
     data_cfg = build_data_namespace(cfg)
@@ -134,7 +143,8 @@ def main() -> int:
     cfg = load_config(Path(args.config) if args.config else None)
     cfg = apply_overrides(cfg, args)
 
-    output_dir = ensure_dir(cfg["path"]["train_output_dir"])
+    output_dir = ensure_dir(_resolve_project_path(cfg["path"]["train_output_dir"]))
+    cfg["path"]["train_output_dir"] = str(output_dir)
     ckpt_dir = ensure_dir(output_dir / "checkpoints")
     logger = build_logger("train", log_path=output_dir / "train.log")
     device = resolve_device(cfg["runtime"]["device"])
@@ -177,7 +187,7 @@ def main() -> int:
     global_step = 0
     if args.resume:
         payload = load_checkpoint(
-            args.resume,
+            _resolve_project_path(args.resume),
             model=model,
             optimizer=optimizer,
             scaler=scaler,

@@ -68,8 +68,8 @@ def _stack_from_dataset(dataset) -> dict[str, np.ndarray]:
     }
 
 
-def _stack_from_qt_test(noise_version: int) -> dict[str, np.ndarray]:
-    test_ds = build_qt_test_dataset(noise_version=noise_version)
+def _stack_from_qt_test(noise_version: int, data_root: str | None) -> dict[str, np.ndarray]:
+    test_ds = build_qt_test_dataset(noise_version=noise_version, data_root=data_root)
     return _stack_from_dataset(test_ds)
 
 
@@ -84,7 +84,7 @@ def _load_eval_arrays(args: argparse.Namespace, cfg: dict) -> dict[str, np.ndarr
     if args.use_bidmc_dataset:
         return _stack_from_bidmc_test(config=cfg)
     if args.use_qt_dataset:
-        return _stack_from_qt_test(noise_version=args.qt_noise_version)
+        return _stack_from_qt_test(noise_version=args.qt_noise_version, data_root=cfg["path"].get("qt_root"))
     if args.input_path is None:
         raise ValueError("未启用内置数据集时，必须提供 --input-path")
     return load_multimodal_arrays(args.input_path)
@@ -154,8 +154,10 @@ def compute_ecg_metrics(clean_ecg: np.ndarray, noisy_ecg: np.ndarray, denoised_e
     return {metric_name: stats["mean"] for metric_name, stats in summary.items()}
 
 
-def _load_qt_noise_levels() -> Optional[np.ndarray]:
-    rnd_path = PROJECT_ROOT / "data" / "db" / "QTDB" / "rnd_test.npy"
+def _load_qt_noise_levels(qt_root: str | None) -> Optional[np.ndarray]:
+    if not qt_root:
+        return None
+    rnd_path = Path(qt_root).expanduser().resolve() / "rnd_test.npy"
     if not rnd_path.exists():
         return None
     noise_levels = np.load(rnd_path, allow_pickle=False)
@@ -221,6 +223,8 @@ def main() -> int:
         cfg["runtime"]["device"] = args.device
     if args.use_bidmc_dataset and args.input_path is not None:
         cfg["bidmc"]["path"]["bidmc_root"] = args.input_path
+    if args.use_qt_dataset and args.input_path is not None:
+        cfg["path"]["qt_root"] = args.input_path
 
     logger = build_logger("evaluate")
     device = resolve_device(cfg["runtime"]["device"])
@@ -293,7 +297,7 @@ def main() -> int:
     }
 
     if args.use_qt_dataset:
-        noise_levels = _load_qt_noise_levels()
+        noise_levels = _load_qt_noise_levels(cfg["path"].get("qt_root"))
         if noise_levels is not None and noise_levels.shape[0] == clean_ecg.shape[0]:
             payload["noise_segments"] = build_noise_segment_summary(metric_arrays, noise_levels)
         else:

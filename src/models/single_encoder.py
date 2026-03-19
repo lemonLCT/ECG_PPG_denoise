@@ -74,17 +74,18 @@ class SingleEncoder1D(nn.Module):
             self.out_channels = self.concat_channels
 
     @staticmethod
-    def _prepare_mask(mask: Tensor | float | int, batch_size: int, device: torch.device, dtype: torch.dtype) -> Tensor:
-        mask_tensor = torch.as_tensor(mask, device=device, dtype=dtype)
-        if mask_tensor.ndim == 0:
-            mask_tensor = mask_tensor.repeat(batch_size)
-        elif mask_tensor.ndim == 2 and mask_tensor.shape[-1] == 1:
-            mask_tensor = mask_tensor.view(batch_size)
-        elif mask_tensor.ndim != 1:
-            raise ValueError(f"encoder mask 期望标量或 [B]，实际为 {tuple(mask_tensor.shape)}")
-        if mask_tensor.shape[0] != batch_size:
-            raise ValueError(f"encoder mask batch 大小不匹配，期望 {batch_size}，实际为 {mask_tensor.shape[0]}")
-        return mask_tensor.view(batch_size, 1, 1)
+    # 编码器不需要 掩码
+    # def _prepare_mask(mask: Tensor | float | int, batch_size: int, device: torch.device, dtype: torch.dtype) -> Tensor:
+    #     mask_tensor = torch.as_tensor(mask, device=device, dtype=dtype)
+    #     if mask_tensor.ndim == 0:
+    #         mask_tensor = mask_tensor.repeat(batch_size)
+    #     elif mask_tensor.ndim == 2 and mask_tensor.shape[-1] == 1:
+    #         mask_tensor = mask_tensor.view(batch_size)
+    #     elif mask_tensor.ndim != 1:
+    #         raise ValueError(f"encoder mask 期望标量或 [B]，实际为 {tuple(mask_tensor.shape)}")
+    #     if mask_tensor.shape[0] != batch_size:
+    #         raise ValueError(f"encoder mask batch 大小不匹配，期望 {batch_size}，实际为 {mask_tensor.shape[0]}")
+    #     return mask_tensor.view(batch_size, 1, 1)
 
     def forward(self, signal: Tensor, mask: Tensor | float | int) -> Tensor:
         """
@@ -96,8 +97,8 @@ class SingleEncoder1D(nn.Module):
         """
         if signal.ndim != 3:
             raise ValueError(f"signal 期望 [B,1,T]，实际为 {tuple(signal.shape)}")
-        mask_tensor = self._prepare_mask(mask, batch_size=signal.shape[0], device=signal.device, dtype=signal.dtype)
+        # mask_tensor = self._prepare_mask(mask, batch_size=signal.shape[0], device=signal.device, dtype=signal.dtype)
         branch_outputs = [branch(signal) for branch in self.branches]
         features = torch.cat(branch_outputs, dim=1)
         encoded = self.projection(features)
-        return encoded * mask_tensor
+        return encoded # * mask_tensor

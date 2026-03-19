@@ -29,6 +29,9 @@ class DataConfig:
 @dataclass
 class PathConfig:
     dataset_path: str = ""
+    qt_root: str = "D:/Code/data/db/QTDB"
+    ppg_fieldstudy_pickle_path: str = "D:/Code/data/PPG_FieldStudy/S1/S1.pkl"
+    artifact_param_path: str = "D:/Code/data/数据处理脚本/artifact_param.mat"
     checkpoint_path: str = ""
     infer_input_path: str = ""
     eval_input_path: str = ""
@@ -40,6 +43,7 @@ class PathConfig:
 @dataclass
 class BidmcPathConfig:
     bidmc_root: str = "D:/Code/data/bidmc-ppg-and-respiration-dataset-1.0.0"
+    nstdb_root: str = "D:/Code/data/db/QTDB/mit-bih-noise-stress-test-database-1.0.0"
 
 
 @dataclass
@@ -53,7 +57,9 @@ class BidmcDataConfig:
     test_ratio: float = 0.15
     normalization: str = "window_minmax"
     ecg_channel_name: str = "II"
+    ecg_channel_fallback_names: list[str] = field(default_factory=lambda: ["ECG", "MLII"])
     ppg_channel_name: str = "PLETH"
+    ppg_channel_fallback_names: list[str] = field(default_factory=lambda: ["PPG"])
     ecg_noise_version: int = 1
     ecg_noise_ratio_range: list[float] = field(default_factory=lambda: [0.2, 2.0])
     bidmc_ppg_noise_seed: int = 2024

@@ -13,6 +13,13 @@ matplotlib.use("Agg")
 from matplotlib.figure import Figure
 import numpy as np
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from config import load_config
+
 DEFAULT_PICKLE_PATH = Path(r"D:\Code\data\PPG_FieldStudy\S1\S1.pkl")
 ECG_DEFAULT_KEY = ("signal", "chest", "ECG")
 PPG_DEFAULT_KEY = ("signal", "wrist", "BVP")
@@ -27,6 +34,15 @@ RUN_CONFIG = {
     "server_port": 7860,
     "share": False,
 }
+
+
+def _resolve_run_config(config_path: str | Path | None) -> dict[str, Any]:
+    cfg = load_config(Path(config_path) if config_path else None)
+    configured_path = str(cfg["path"].get("ppg_fieldstudy_pickle_path", "")).strip()
+    resolved = dict(RUN_CONFIG)
+    if configured_path:
+        resolved["path"] = Path(configured_path).expanduser()
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -46,15 +62,16 @@ def configure_output_streams() -> None:
             stream.reconfigure(errors="backslashreplace")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(run_config: dict[str, Any]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="使用 Gradio 分页查看 pkl 中的 ECG / PPG 波形")
-    parser.add_argument("--path", type=Path, default=RUN_CONFIG["path"], help="pickle 文件路径")
-    parser.add_argument("--ecg-hz", type=float, default=RUN_CONFIG["ecg_hz"], help="ECG 采样率")
-    parser.add_argument("--ppg-hz", type=float, default=RUN_CONFIG["ppg_hz"], help="PPG 采样率")
-    parser.add_argument("--segment-sec", type=float, default=RUN_CONFIG["segment_sec"], help="每页显示的片段时长（秒）")
-    parser.add_argument("--server-name", type=str, default=RUN_CONFIG["server_name"], help="Gradio 监听地址")
-    parser.add_argument("--server-port", type=int, default=RUN_CONFIG["server_port"], help="Gradio 端口")
-    parser.add_argument("--share", action="store_true", default=RUN_CONFIG["share"], help="是否启用 Gradio share")
+    parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
+    parser.add_argument("--path", type=Path, default=run_config["path"], help="pickle 文件路径")
+    parser.add_argument("--ecg-hz", type=float, default=run_config["ecg_hz"], help="ECG 采样率")
+    parser.add_argument("--ppg-hz", type=float, default=run_config["ppg_hz"], help="PPG 采样率")
+    parser.add_argument("--segment-sec", type=float, default=run_config["segment_sec"], help="每页显示的片段时长（秒）")
+    parser.add_argument("--server-name", type=str, default=run_config["server_name"], help="Gradio 监听地址")
+    parser.add_argument("--server-port", type=int, default=run_config["server_port"], help="Gradio 端口")
+    parser.add_argument("--share", action="store_true", default=run_config["share"], help="是否启用 Gradio share")
     return parser
 
 
@@ -376,7 +393,11 @@ def create_gradio_app(initial_bundle: dict[str, Any]):
 
 def main() -> int:
     configure_output_streams()
-    args = build_parser().parse_args()
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default=None)
+    pre_args, _ = pre_parser.parse_known_args()
+    run_config = _resolve_run_config(pre_args.config)
+    args = build_parser(run_config=run_config).parse_args()
     path = args.path.expanduser().resolve()
 
     try:

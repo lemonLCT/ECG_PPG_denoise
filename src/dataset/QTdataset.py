@@ -68,21 +68,24 @@ class QTDataset(Dataset[dict[str, torch.Tensor]]):
         }
 
 
-def _resolve_qt_data_root() -> Path:
-    project_root = Path(__file__).resolve().parents[2]
-    data_root = project_root / "data" / "db" / "QTDB"
-    if (data_root / "qt-database-1.0.0").exists() and (
-        data_root / "mit-bih-noise-stress-test-database-1.0.0"
+def _resolve_qt_data_root(data_root: str | Path | None = None) -> Path:
+    if data_root is None:
+        project_root = Path(__file__).resolve().parents[2]
+        resolved_root = project_root / "data" / "db" / "QTDB"
+    else:
+        resolved_root = Path(data_root).expanduser().resolve()
+    if (resolved_root / "qt-database-1.0.0").exists() and (
+        resolved_root / "mit-bih-noise-stress-test-database-1.0.0"
     ).exists():
-        return data_root
+        return resolved_root
     raise FileNotFoundError(
         "未找到 QT/NSTDB 数据目录。当前 QT 数据要求位于 "
-        f"{data_root}，且其中包含 qt-database-1.0.0 和 "
+        f"{resolved_root}，且其中包含 qt-database-1.0.0 和 "
         "mit-bih-noise-stress-test-database-1.0.0。"
     )
 
 
-def load_qt_arrays(noise_version: int = 1) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def load_qt_arrays(noise_version: int = 1, data_root: str | Path | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     调用 QT Data_Preparation，并返回:
     - `train_noisy_ecg:[N,1,T]`
@@ -90,7 +93,7 @@ def load_qt_arrays(noise_version: int = 1) -> tuple[np.ndarray, np.ndarray, np.n
     - `test_noisy_ecg:[M,1,T]`
     - `test_clean_ecg:[M,1,T]`
     """
-    selected_data_root = _resolve_qt_data_root()
+    selected_data_root = _resolve_qt_data_root(data_root=data_root)
     from data.Data_Preparation.data_preparation import Data_Preparation
 
     dataset_return = Data_Preparation(noise_version=noise_version, data_root=selected_data_root)
@@ -135,9 +138,13 @@ def build_qt_train_val_test_datasets(
     noise_version: int = 1,
     val_ratio: float = 0.3,
     seed: int = 42,
+    data_root: str | Path | None = None,
 ) -> tuple[QTDataset, QTDataset, QTDataset]:
     """构造 QT 训练/验证/测试三段数据集。"""
-    train_noisy_ecg, train_clean_ecg, test_noisy_ecg, test_clean_ecg = load_qt_arrays(noise_version=noise_version)
+    train_noisy_ecg, train_clean_ecg, test_noisy_ecg, test_clean_ecg = load_qt_arrays(
+        noise_version=noise_version,
+        data_root=data_root,
+    )
     split_train_noisy, split_train_clean, val_noisy_ecg, val_clean_ecg = split_qt_train_val_arrays(
         train_noisy_ecg=train_noisy_ecg,
         train_clean_ecg=train_clean_ecg,
@@ -154,17 +161,19 @@ def build_qt_train_val_datasets(
     noise_version: int = 1,
     val_ratio: float = 0.3,
     seed: int = 42,
+    data_root: str | Path | None = None,
 ) -> tuple[QTDataset, QTDataset]:
     """构造 QT 训练/验证数据集；验证集从训练集内部切分。"""
     train_ds, val_ds, _ = build_qt_train_val_test_datasets(
         noise_version=noise_version,
         val_ratio=val_ratio,
         seed=seed,
+        data_root=data_root,
     )
     return train_ds, val_ds
 
 
-def build_qt_test_dataset(noise_version: int = 1) -> QTDataset:
+def build_qt_test_dataset(noise_version: int = 1, data_root: str | Path | None = None) -> QTDataset:
     """构造 QT 独立测试集。"""
-    _, _, test_ds = build_qt_train_val_test_datasets(noise_version=noise_version)
+    _, _, test_ds = build_qt_train_val_test_datasets(noise_version=noise_version, data_root=data_root)
     return test_ds

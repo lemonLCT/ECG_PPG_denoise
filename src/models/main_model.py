@@ -382,10 +382,13 @@ class DDPM(nn.Module):
         clean_ppg: Tensor,
         modality_mask: Optional[Tensor] = None,
     ) -> Dict[str, Tensor]:
+
+
         clean_ecg = self._ensure_3d(clean_ecg, "clean_ecg")
         clean_ppg = self._ensure_3d(clean_ppg, "clean_ppg")
         noisy_ecg = self._ensure_3d(noisy_ecg, "noisy_ecg")
         noisy_ppg = self._ensure_3d(noisy_ppg, "noisy_ppg")
+
         if clean_ecg.shape != clean_ppg.shape or noisy_ecg.shape != noisy_ppg.shape:
             raise ValueError("训练时 ECG/PPG 形状必须一致")
 
