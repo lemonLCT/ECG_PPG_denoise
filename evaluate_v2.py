@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm.auto import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -16,7 +16,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from dataset import build_bidmc_test_dataset
+from dataset import build_bidmc_test_dataset, build_qt_test_dataset
 from models.DDPM import DDPM
 from models.HNF import ConditionalModel
 from utils.common import dump_config_snapshot, ensure_dir, resolve_device, seed_everything
@@ -27,8 +27,9 @@ DEFAULT_CONFIG_PATH = SRC_DIR / "config" / "bidmc_v2.yaml"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="BIDMC ECG 单模态 DDPM v2 评估入口")
+    parser = argparse.ArgumentParser(description="BIDMC/QT ECG 单模态 DDPM v2 评估入口")
     parser.add_argument("--config", type=str, default=str(DEFAULT_CONFIG_PATH), help="v2 YAML 配置文件路径")
+    parser.add_argument("--dataset", type=str, default="bidmc", choices=["bidmc", "qt"], help="选择评估数据集")
     parser.add_argument("--checkpoint", type=str, default=None, help="模型 checkpoint 路径")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", type=str, default=None)
@@ -36,7 +37,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-steps", type=int, default=None)
     parser.add_argument("--max-samples", type=int, default=None)
-    parser.add_argument("--dataset-path", type=str, default=None, help="BIDMC 数据集根目录")
+    parser.add_argument("--dataset-path", type=str, default=None, help="数据集根目录；BIDMC 对应 bidmc_root，QT 对应 qt_root")
+    parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本")
     return parser.parse_args(argv)
 
 
@@ -60,8 +62,11 @@ def main(argv: list[str] | None = None) -> int:
         cfg["diffusion"]["num_steps"] = args.num_steps
     if args.max_samples is not None:
         cfg["evaluate"]["max_samples"] = args.max_samples
-    if args.dataset_path is not None:
+    if args.dataset == "bidmc" and args.dataset_path is not None:
         cfg["bidmc"]["path"]["bidmc_root"] = args.dataset_path
+    if args.dataset == "qt" and args.dataset_path is not None:
+        cfg.setdefault("path", {})
+        cfg["path"]["qt_root"] = args.dataset_path
     if args.checkpoint is not None:
         cfg["path"]["checkpoint_path"] = args.checkpoint
 
@@ -80,19 +85,20 @@ def main(argv: list[str] | None = None) -> int:
     dump_config_snapshot(cfg, output_dir)
     logger = build_logger("evaluate_v2", log_path=output_dir / "evaluate_v2.log")
 
-    dataset = build_bidmc_test_dataset(
-        config=cfg,
-        split_seed=int(cfg["bidmc"]["data"]["split_seed"]),
-    )
+    if args.dataset == "qt":
+        dataset = build_qt_test_dataset(
+            noise_version=args.qt_noise_version,
+            data_root=cfg.get("path", {}).get("qt_root") or None,
+        )
+    else:
+        dataset = build_bidmc_test_dataset(
+            config=cfg,
+            split_seed=int(cfg["bidmc"]["data"]["split_seed"]),
+        )
+
     if int(cfg["evaluate"]["max_samples"]) > 0:
         max_samples = int(cfg["evaluate"]["max_samples"])
-        dataset.clean_ecg = dataset.clean_ecg[:max_samples]
-        dataset.noisy_ecg = dataset.noisy_ecg[:max_samples]
-        dataset.clean_ppg = dataset.clean_ppg[:max_samples]
-        dataset.noisy_ppg = dataset.noisy_ppg[:max_samples]
-        dataset.record_ids = dataset.record_ids[:max_samples]
-        dataset.window_starts = dataset.window_starts[:max_samples]
-        dataset.sampling_rates_hz = dataset.sampling_rates_hz[:max_samples]
+        dataset = Subset(dataset, range(min(max_samples, len(dataset))))
 
     dataloader = DataLoader(
         dataset,
@@ -120,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     denoised_batches: list[np.ndarray] = []
 
     with torch.inference_mode():
-        eval_bar = tqdm(dataloader, desc="Evaluate-v2", unit="batch", dynamic_ncols=True, leave=False)
+        eval_bar = tqdm(dataloader, desc=f"Evaluate-v2-{args.dataset}", unit="batch", dynamic_ncols=True, leave=False)
         for batch in eval_bar:
             clean_ecg = batch["clean_ecg"].to(device, non_blocking=True)
             noisy_ecg = batch["noisy_ecg"].to(device, non_blocking=True)
@@ -161,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "checkpoint": str(checkpoint_file.resolve()),
+                "dataset": args.dataset,
                 "num_steps": int(cfg["diffusion"]["num_steps"]),
                 "test_loss": (sum(losses) / len(losses)) if losses else 0.0,
                 "metrics": metric_summary,
