@@ -30,7 +30,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="评估 ECG 去噪指标")
     parser.add_argument("--config", type=str, default=None, help="YAML 配置文件路径")
     parser.add_argument("--checkpoint", type=str, default=None, help="模型 checkpoint 路径")
-    parser.add_argument("--input-path", type=str, default=None, help="输入数据(.npz/.pt/.npy)或 BIDMC 数据根目录")
+    parser.add_argument("--input-path", type=str, default=None, help="输入数据(.npz/.pt/.npy)或 BIDMC/QT 数据集根目录")
+    parser.add_argument("--dataset", type=str, default=None, choices=["file", "bidmc", "qt"], help="显式选择评估数据集")
     parser.add_argument("--use-bidmc-dataset", action="store_true", help="使用 BIDMC 测试集评估")
     parser.add_argument("--use-qt-dataset", action="store_true", help="使用 QT Data_Preparation 测试集评估")
     parser.add_argument("--qt-noise-version", type=int, default=1, choices=[1, 2], help="QT 噪声版本")
@@ -69,22 +70,27 @@ def _stack_from_dataset(dataset) -> dict[str, np.ndarray]:
 
 
 def _stack_from_qt_test(noise_version: int, data_root: str | None) -> dict[str, np.ndarray]:
-    test_ds = build_qt_test_dataset(noise_version=noise_version, data_root=data_root)
-    return _stack_from_dataset(test_ds)
+    return _stack_from_dataset(build_qt_test_dataset(noise_version=noise_version, data_root=data_root))
 
 
 def _stack_from_bidmc_test(config: dict) -> dict[str, np.ndarray]:
-    test_ds = build_bidmc_test_dataset(config=config)
-    return _stack_from_dataset(test_ds)
+    return _stack_from_dataset(build_bidmc_test_dataset(config=config))
 
 
 def _load_eval_arrays(args: argparse.Namespace, cfg: dict) -> dict[str, np.ndarray]:
-    if args.use_bidmc_dataset and args.use_qt_dataset:
-        raise ValueError("BIDMC 与 QT 数据集开关不能同时启用")
-    if args.use_bidmc_dataset:
+    selected_dataset = getattr(args, "dataset", None)
+    use_bidmc_dataset = bool(args.use_bidmc_dataset or selected_dataset == "bidmc")
+    use_qt_dataset = bool(args.use_qt_dataset or selected_dataset == "qt")
+    use_file_dataset = bool(selected_dataset == "file")
+
+    if use_bidmc_dataset and use_qt_dataset:
+        raise ValueError("BIDMC 和 QT 数据集开关不能同时启用")
+    if use_bidmc_dataset:
         return _stack_from_bidmc_test(config=cfg)
-    if args.use_qt_dataset:
+    if use_qt_dataset:
         return _stack_from_qt_test(noise_version=args.qt_noise_version, data_root=cfg["path"].get("qt_root"))
+    if use_file_dataset and args.input_path is None:
+        raise ValueError("当数据集选择为 file 时，必须提供 --input-path")
     if args.input_path is None:
         raise ValueError("未启用内置数据集时，必须提供 --input-path")
     return load_multimodal_arrays(args.input_path)
@@ -105,17 +111,13 @@ def _select_inputs(
 def _safe_mean(x: np.ndarray) -> float:
     arr = np.asarray(x, dtype=np.float64).reshape(-1)
     arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return float("nan")
-    return float(np.mean(arr))
+    return float(np.mean(arr)) if arr.size else float("nan")
 
 
 def _safe_std(x: np.ndarray) -> float:
     arr = np.asarray(x, dtype=np.float64).reshape(-1)
     arr = arr[np.isfinite(arr)]
-    if arr.size == 0:
-        return float("nan")
-    return float(np.std(arr))
+    return float(np.std(arr)) if arr.size else float("nan")
 
 
 def _metric_vector(x: np.ndarray) -> np.ndarray:
@@ -160,8 +162,7 @@ def _load_qt_noise_levels(qt_root: str | None) -> Optional[np.ndarray]:
     rnd_path = Path(qt_root).expanduser().resolve() / "rnd_test.npy"
     if not rnd_path.exists():
         return None
-    noise_levels = np.load(rnd_path, allow_pickle=False)
-    return np.asarray(noise_levels, dtype=np.float64).reshape(-1)
+    return np.asarray(np.load(rnd_path, allow_pickle=False), dtype=np.float64).reshape(-1)
 
 
 def build_noise_segment_summary(
@@ -184,7 +185,7 @@ def build_noise_segment_summary(
 
 
 def _load_checkpoint_state(ckpt_path: Path, device: torch.device) -> dict:
-    payload = torch.load(ckpt_path, map_location=device)
+    payload = torch.load(ckpt_path, map_location=device, weights_only=False)
     if isinstance(payload, dict) and "model" in payload:
         return payload["model"]
     if isinstance(payload, dict):
@@ -221,9 +222,9 @@ def main() -> int:
     cfg = load_config(Path(args.config) if args.config else None)
     if args.device is not None:
         cfg["runtime"]["device"] = args.device
-    if args.use_bidmc_dataset and args.input_path is not None:
+    if (args.use_bidmc_dataset or args.dataset == "bidmc") and args.input_path is not None:
         cfg["bidmc"]["path"]["bidmc_root"] = args.input_path
-    if args.use_qt_dataset and args.input_path is not None:
+    if (args.use_qt_dataset or args.dataset == "qt") and args.input_path is not None:
         cfg["path"]["qt_root"] = args.input_path
 
     logger = build_logger("evaluate")
@@ -244,7 +245,13 @@ def main() -> int:
     model.eval()
     logger.info("加载 checkpoint: %s", ckpt_path)
 
-    if not args.use_bidmc_dataset and not args.use_qt_dataset and args.input_path is None and cfg["path"]["eval_input_path"]:
+    if (
+        args.dataset is None
+        and not args.use_bidmc_dataset
+        and not args.use_qt_dataset
+        and args.input_path is None
+        and cfg["path"]["eval_input_path"]
+    ):
         args.input_path = cfg["path"]["eval_input_path"]
     arrays = _load_eval_arrays(args, cfg)
     if args.max_samples > 0:
@@ -290,13 +297,14 @@ def main() -> int:
 
     payload: dict[str, object] = {
         "mode": args.mode,
+        "dataset": args.dataset or ("bidmc" if args.use_bidmc_dataset else "qt" if args.use_qt_dataset else "file"),
         "shots": args.shots,
         "num_steps": args.num_steps,
         "use_ddim": args.use_ddim,
         "metrics": metric_summary,
     }
 
-    if args.use_qt_dataset:
+    if args.use_qt_dataset or args.dataset == "qt":
         noise_levels = _load_qt_noise_levels(cfg["path"].get("qt_root"))
         if noise_levels is not None and noise_levels.shape[0] == clean_ecg.shape[0]:
             payload["noise_segments"] = build_noise_segment_summary(metric_arrays, noise_levels)

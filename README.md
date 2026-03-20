@@ -187,6 +187,39 @@ python data/ppg_noise_generate.py \
 pytest -q
 ```
 
+## BIDMC 单模态 v2
+
+`train_v2.py` 和 `evaluate_v2.py` 是独立于现有多模态入口的 BIDMC ECG 单模态实验链路，固定使用：
+
+- `src/dataset/bidmc_dataset.py`
+- `src/models/HNF.py` 中的 `ConditionalModel`
+- `src/models/DDPM.py`
+- `src/config/bidmc_v2.yaml`
+
+训练示例：
+
+```bash
+python train_v2.py --config src/config/bidmc_v2.yaml
+python train_v2.py --config src/config/bidmc_v2.yaml --device cuda --batch-size 8 --epochs 20
+```
+
+评估示例：
+
+```bash
+python evaluate_v2.py --config src/config/bidmc_v2.yaml --checkpoint artifacts/runs/train_v2/checkpoints/best.pt
+python evaluate_v2.py --config src/config/bidmc_v2.yaml --checkpoint artifacts/runs/train_v2/checkpoints/best.pt --num-steps 50 --max-samples 32
+```
+
+`evaluate_v2.py` 会输出：
+
+- `metrics.json`：测试集均值 loss 和 ECG 指标汇总
+- `eval_outputs.npz`：`clean_ecg`、`noisy_ecg`、`denoised_ecg` 与逐样本指标数组
+
+兼容性说明：
+
+- `src/dataset/bidmc_dataset.py` 现在单样本只返回 `clean_ecg`、`noisy_ecg`、`clean_ppg`、`noisy_ppg`
+- 旧版基于 BIDMC 的多模态 `train.py` / `evaluate.py` 入口不再保证兼容
+
 已补充的关键回归点：
 
 - 缺失模态不会泄漏到噪声预测主干

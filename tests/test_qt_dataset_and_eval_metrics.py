@@ -141,3 +141,39 @@ def test_load_eval_arrays_can_switch_to_bidmc(monkeypatch) -> None:
     assert calls == ["bidmc"]
     assert arrays["clean_ecg"].shape == (2, 1, 8)
     assert arrays["noisy_ppg"].shape == (2, 1, 8)
+
+
+def test_load_eval_arrays_can_switch_to_qt_by_dataset_argument(monkeypatch) -> None:
+    calls: list[tuple[int, str | None]] = []
+
+    class FakeDataset:
+        def __len__(self) -> int:
+            return 1
+
+        def __getitem__(self, index: int):
+            base = np.full((1, 8), 1.0, dtype=np.float32)
+            return {
+                "clean_ecg": base,
+                "noisy_ecg": base + 0.1,
+                "clean_ppg": base * 0.0,
+                "noisy_ppg": base * 0.0,
+                "modality_mask": torch.tensor([1.0, 0.0], dtype=torch.float32),
+            }
+
+    def fake_build_qt_test_dataset(*, noise_version, data_root):
+        calls.append((noise_version, data_root))
+        return FakeDataset()
+
+    monkeypatch.setattr(evaluate, "build_qt_test_dataset", fake_build_qt_test_dataset)
+    args = SimpleNamespace(
+        dataset="qt",
+        use_bidmc_dataset=False,
+        use_qt_dataset=False,
+        qt_noise_version=2,
+        input_path=None,
+    )
+
+    arrays = evaluate._load_eval_arrays(args, {"path": {"qt_root": "qt_root"}})
+
+    assert calls == [(2, "qt_root")]
+    assert arrays["clean_ecg"].shape == (1, 1, 8)

@@ -1,0 +1,64 @@
+runtime:
+  experiment_name: bidmc_ecg_ddpm_v2
+  seed: 42
+  device: cpu
+  use_amp: true
+
+path:
+  checkpoint_path: ""
+  qt_root: "D:/Code/data/QT/"
+  train_output_dir: artifacts/runs/train_v2
+  eval_output_dir: artifacts/eval_v2
+
+bidmc:
+  path:
+    bidmc_root: "D:/Code/data/bidmc-ppg-and-respiration-dataset-1.0.0"
+    nstdb_root: "D:/Code/data/QT/mit-bih-noise-stress-test-database-1.0.0"
+  data:
+    window_length: 500
+    window_stride: 250
+    sampling_rate_hz: 125.0
+    split_seed: 42
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    normalization: window_minmax
+    ecg_channel_name: II
+    ecg_channel_fallback_names: [ECG, MLII]
+    ppg_channel_name: PLETH
+    ppg_channel_fallback_names: [PPG]
+    ecg_noise_version: 1
+    ecg_noise_ratio_range: [0.2, 2.0]
+    bidmc_ppg_noise_seed: 2024
+    ppg_noise_ratio_range: [0.2, 2.0]
+    ppg_noise_artifact_param_path: ""
+    ppg_noise_artifact_types: [1, 1, 1, 1]
+    ppg_noise_dur_mu: [10.0, 10.0, 10.0, 10.0, 10.0]
+    ppg_noise_rms_shape: [2.0, 2.0, 2.0, 2.0]
+    ppg_noise_rms_scale: [0.35, 0.45, 0.55, 0.75]
+    ppg_noise_slope_mean: [-6.0, -8.0, -10.0, -12.0]
+    ppg_noise_slope_std: [0.0, 0.0, 0.0, 0.0]
+
+hnf:
+  feats: 80
+
+diffusion:
+  schedule: linear
+  num_steps: 200
+  beta_start: 0.0001
+  beta_end: 0.02
+
+train:
+  batch_size: 16
+  val_batch_size: 16
+  epochs: 50
+  lr: 0.0001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  save_every_epochs: 10
+  max_steps_per_epoch: 5000
+
+evaluate:
+  batch_size: 16
+  num_steps: 200
+  max_samples: 0

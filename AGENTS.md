@@ -5,6 +5,7 @@
 - 只要任务涉及第三方依赖库或包（新增、升级、API 用法、兼容性判断），必须先查询 Context7 MCP：先 `resolve-library-id`，再 `query-docs`，并基于官方文档给出实现或结论。
 - 禁止凭记忆臆断第三方库 API；若 Context7 无结果，需明确说明并给出保守替代方案。
 - 新增代码优先放入 `src/`，避免继续扩散到根目录脚本式实现。
+- 必须注明每个函数的功能，输入输出参数含义，张量形状等
 
 ## 2) 项目目标与边界
 - 项目目标：构建 ECG/PPG 去噪实验工程，支持数据准备、训练、评估、复现实验与结果沉淀。
@@ -29,8 +30,10 @@
   - `metrics/`：计算评价指标的函数和类的存储目录。
   - `utils/`：日志、随机种子、IO、通用工具。
 - `train.py`：模型训练入口，用于命令行开始训练
+- `train_v2.py`：BIDMC ECG 单模态 DDPM v2 训练入口，仅使用 `src/dataset/bidmc_dataset.py` 与 `src/models/DDPM.py` / `src/models/HNF.py` 链路。
 - `infer.py`：模型推理入口，用于噪声去噪推理
 - `evaluate.py`：模型评估入口，用于预训练模型评估
+- `evaluate_v2.py`：BIDMC ECG 单模态 DDPM v2 评估入口，输出测试集均值 loss、去噪 ECG 与指标文件。
 
 ## 5) 环境与依赖管理
 - Python 版本：`>=3.10`。
@@ -130,9 +133,13 @@
 - `src/utils/common.py`：随机种子、设备解析、配置快照、checkpoint IO 和演示信号生成。
 - `src/utils/logging.py`：结构化日志构建。
 - `src/config/base.yaml`：默认模型与训练入口统一使用的基础 YAML 配置，顶层包含 `runtime/data/path/loss/model/train`。
+- `src/config/bidmc_v2.yaml`：BIDMC ECG 单模态 DDPM v2 专用配置，顶层包含 `runtime/path/bidmc/hnf/diffusion/train/evaluate`。
 - `src/config/loader.py`：默认配置加载与基础校验入口，返回嵌套 dict。
 - `tests/test_multimodal_diffusion_smoke.py`：主模型前向输出、单步训练链路和缺失模态推理的 smoke 测试。
 - `tests/test_smoke_pipeline.py`：最小训练链路 smoke 测试，验证 `ExperimentRunner` 可直接执行。
+- `tests/test_bidmc_dataset_v2.py`：验证 BIDMC 数据集样本仅返回干净/含噪 ECG 与 PPG 四路张量。
+- `tests/test_train_v2.py`：验证 `train_v2.py` 的最小训练链路、checkpoint 落盘与配置快照输出。
+- `tests/test_evaluate_v2.py`：验证 `evaluate_v2.py` 的最小评估链路、metrics JSON 与 NPZ 产物输出。
 - `data/inspect_pickle.py`：pickle 查看脚本，默认读取 `D:\Code\data\PPG_FieldStudy\S1\S1.pkl` 并输出内容，兼容旧 pickle 编码回退。
 - `data/resample.py`：PPG/ECG 重采样工具，提供 `ppg_resample` 与 `ecg_resample` 两个对外函数，显式接收 `source_hz` 和 `target_hz`，内部使用 `soxr` 开源库进行高质量重采样。
 - `data/ppg_noise_generate.py`：PPG 伪影生成脚本，使用纯 Python 复现 `gen_PPG_artifacts.m` 的核心逻辑，生成噪声并导出 CSV、SVG 波形图、参数元数据与可选状态序列。

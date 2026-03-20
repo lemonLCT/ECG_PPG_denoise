@@ -246,7 +246,7 @@ def _generate_ppg_noise_full(record_id: str, signal_length: int, bidmc_data_cfg:
     return np.asarray(generated.signal_values, dtype=np.float32)
 
 
-class BIDMCDataset(Dataset[dict[str, torch.Tensor | str]]):
+class BIDMCDataset(Dataset[dict[str, torch.Tensor]]):
     """BIDMC 双模态对齐训练集。"""
 
     def __init__(
@@ -276,21 +276,16 @@ class BIDMCDataset(Dataset[dict[str, torch.Tensor | str]]):
         self.record_ids = list(record_ids)
         self.window_starts = [int(v) for v in window_starts]
         self.sampling_rates_hz = [float(v) for v in sampling_rates_hz]
-        self.modality_mask = torch.tensor([1.0, 1.0], dtype=torch.float32)
 
     def __len__(self) -> int:
         return int(self.clean_ecg.shape[0])
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         return {
             "clean_ecg": self.clean_ecg[index],
             "noisy_ecg": self.noisy_ecg[index],
             "clean_ppg": self.clean_ppg[index],
             "noisy_ppg": self.noisy_ppg[index],
-            "modality_mask": self.modality_mask.clone(),
-            "record_id": self.record_ids[index],
-            "window_start": torch.tensor(self.window_starts[index], dtype=torch.int64),
-            "sampling_rate_hz": torch.tensor(self.sampling_rates_hz[index], dtype=torch.float32),
         }
 
 
